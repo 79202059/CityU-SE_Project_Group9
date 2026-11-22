@@ -143,8 +143,15 @@ class ArchitecturalSmellDetector:
         intra-project dependency detection.
         """
         try:
-            with open(file_path, 'r') as file:
-                tree = ast.parse(file.read())
+            try:
+                with open(file_path, 'r', encoding='utf-8') as file:
+                    content = file.read()
+            except UnicodeDecodeError:
+                # Fall back for files that are not valid UTF-8 (e.g. legacy
+                # latin-1 encodings); latin-1 never raises on byte input.
+                with open(file_path, 'r', encoding='latin-1') as file:
+                    content = file.read()
+            tree = ast.parse(content)
 
             # Get relative module path from consistent project root
             module_name = os.path.relpath(os.path.abspath(file_path), self.project_root)
