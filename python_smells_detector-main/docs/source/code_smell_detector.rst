@@ -29,10 +29,6 @@ Per-file smells:
 * **Inappropriate Intimacy** — classes that access each other's private members
 * **Message Chains** — long chains of method calls (``a.b().c().d()``)
 * **Middle Man** — classes that only delegate to another class
-* **Magic Number** — hard-coded numeric literals that should be named constants
-* **Magic String** — string literals used in comparisons or repeated within a function
-* **Constant Condition** — ``if``/``while`` conditions that can never branch, including
-  conditions on a local variable assigned a single literal value
 
 Cross-file smells (detected after all files are processed):
 

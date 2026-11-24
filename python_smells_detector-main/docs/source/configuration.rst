@@ -22,18 +22,6 @@ Example Configuration
        value: 15
        explanation: "Classes with more than this many methods may have too many responsibilities"
 
-     MAGIC_NUMBER_THRESHOLD:
-       value: 2
-       explanation: "Functions hard-coding this many distinct unexplained numeric literals may bury domain knowledge"
-
-     MAGIC_STRING_THRESHOLD:
-       value: 2
-       explanation: "Functions using this many distinct compared or repeated string literals may encode vocabulary inline"
-
-     MAGIC_STRING_OCCURRENCES:
-       value: 2
-       explanation: "A string literal repeated at least this many times inside one function should be a named constant"
-
    architectural_smells:
      GOD_OBJECT_FUNCTIONS:
        value: 20

@@ -64,3 +64,14 @@ sponge/
 analysis/
 cloned_repositories/
 visualizations/
+!tests/fixtures/sample_project/
+tests/_tmp_*/
+
+# pytest 8/9 session directories and caches created by the test suite
+pytest-cache-files-*/
+_pytest_tmp/
+
+# pyexamine-delta artefacts written next to the analysed project
+# .pyexamine-baseline.json is deliberately NOT ignored: the baseline belongs
+# in the repository, otherwise every PR diffs against nothing.
+delta-summary.md

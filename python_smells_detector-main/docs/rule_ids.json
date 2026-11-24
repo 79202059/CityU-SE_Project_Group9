@@ -1,0 +1,237 @@
+{
+  "Alternative Classes with Different Interfaces": [
+    "pyex-code-alternative-classes-with-different-interfaces",
+    "PX-C01",
+    "code"
+  ],
+  "Data Class": [
+    "pyex-code-data-class",
+    "PX-C02",
+    "code"
+  ],
+  "Data Clumps": [
+    "pyex-code-data-clumps",
+    "PX-C03",
+    "code"
+  ],
+  "Dead Code": [
+    "pyex-code-dead-code",
+    "PX-C04",
+    "code"
+  ],
+  "Duplicate Code": [
+    "pyex-code-duplicate-code",
+    "PX-C05",
+    "code"
+  ],
+  "Excessive Comments": [
+    "pyex-code-excessive-comments",
+    "PX-C06",
+    "code"
+  ],
+  "Feature Envy": [
+    "pyex-code-feature-envy",
+    "PX-C07",
+    "code"
+  ],
+  "Inappropriate Intimacy": [
+    "pyex-code-inappropriate-intimacy",
+    "PX-C08",
+    "code"
+  ],
+  "Large Class": [
+    "pyex-code-large-class",
+    "PX-C09",
+    "code"
+  ],
+  "Lazy Class": [
+    "pyex-code-lazy-class",
+    "PX-C10",
+    "code"
+  ],
+  "Long Method": [
+    "pyex-code-long-method",
+    "PX-C11",
+    "code"
+  ],
+  "Long Parameter List": [
+    "pyex-code-long-parameter-list",
+    "PX-C12",
+    "code"
+  ],
+  "Message Chains": [
+    "pyex-code-message-chains",
+    "PX-C13",
+    "code"
+  ],
+  "Middle Man": [
+    "pyex-code-middle-man",
+    "PX-C14",
+    "code"
+  ],
+  "Parallel Inheritance Hierarchies": [
+    "pyex-code-parallel-inheritance-hierarchies",
+    "PX-C15",
+    "code"
+  ],
+  "Potential Divergent Change": [
+    "pyex-code-potential-divergent-change",
+    "PX-C16",
+    "code"
+  ],
+  "Potential Shotgun Surgery": [
+    "pyex-code-potential-shotgun-surgery",
+    "PX-C17",
+    "code"
+  ],
+  "Primitive Obsession": [
+    "pyex-code-primitive-obsession",
+    "PX-C18",
+    "code"
+  ],
+  "Speculative Generality": [
+    "pyex-code-speculative-generality",
+    "PX-C19",
+    "code"
+  ],
+  "Switch Statements": [
+    "pyex-code-switch-statements",
+    "PX-C20",
+    "code"
+  ],
+  "Temporary Field": [
+    "pyex-code-temporary-field",
+    "PX-C21",
+    "code"
+  ],
+  "Cyclic Dependency": [
+    "pyex-arch-cyclic-dependency",
+    "PX-A01",
+    "arch"
+  ],
+  "God Object": [
+    "pyex-arch-god-object",
+    "PX-A02",
+    "arch"
+  ],
+  "Hub-like Dependency": [
+    "pyex-arch-hub-like-dependency",
+    "PX-A03",
+    "arch"
+  ],
+  "Orphan Module": [
+    "pyex-arch-orphan-module",
+    "PX-A04",
+    "arch"
+  ],
+  "Potential Improper API Usage": [
+    "pyex-arch-potential-improper-api-usage",
+    "PX-A05",
+    "arch"
+  ],
+  "Potential Redundant Abstractions": [
+    "pyex-arch-potential-redundant-abstractions",
+    "PX-A06",
+    "arch"
+  ],
+  "Scattered Functionality": [
+    "pyex-arch-scattered-functionality",
+    "PX-A07",
+    "arch"
+  ],
+  "Unstable Dependency": [
+    "pyex-arch-unstable-dependency",
+    "PX-A08",
+    "arch"
+  ],
+  "Deep Inheritance Tree (DIT)": [
+    "pyex-struct-dit",
+    "PX-S01",
+    "struct"
+  ],
+  "Deep Nesting": [
+    "pyex-struct-deep-nesting",
+    "PX-S02",
+    "struct"
+  ],
+  "High Coupling Between Object Classes (CBO)": [
+    "pyex-struct-cbo",
+    "PX-S03",
+    "struct"
+  ],
+  "High Cyclomatic Complexity": [
+    "pyex-struct-high-cyclomatic-complexity",
+    "PX-S04",
+    "struct"
+  ],
+  "High Fan-in": [
+    "pyex-struct-high-fan-in",
+    "PX-S05",
+    "struct"
+  ],
+  "High Fan-out": [
+    "pyex-struct-high-fan-out",
+    "PX-S06",
+    "struct"
+  ],
+  "High Lack of Cohesion of Methods (LCOM)": [
+    "pyex-struct-lcom",
+    "PX-S07",
+    "struct"
+  ],
+  "High Lines of Code (LOC)": [
+    "pyex-struct-loc",
+    "PX-S08",
+    "struct"
+  ],
+  "High Message Passing Coupling (MPC)": [
+    "pyex-struct-mpc",
+    "PX-S09",
+    "struct"
+  ],
+  "High Number of Classes (NOC)": [
+    "pyex-struct-noc",
+    "PX-S10",
+    "struct"
+  ],
+  "High Number of Classes (NOCC)": [
+    "pyex-struct-nocc",
+    "PX-S11",
+    "struct"
+  ],
+  "High Number of Methods (NOM)": [
+    "pyex-struct-nom",
+    "PX-S12",
+    "struct"
+  ],
+  "High Response for a Class (RFC)": [
+    "pyex-struct-rfc",
+    "PX-S13",
+    "struct"
+  ],
+  "High Weight of a Class (WAC)": [
+    "pyex-struct-wac",
+    "PX-S14",
+    "struct"
+  ],
+  "High Weighted Methods per Class (WMPC)": [
+    "pyex-struct-wmpc",
+    "PX-S15",
+    "struct"
+  ],
+  "Large Class (SIZE2)": [
+    "pyex-struct-size2",
+    "PX-S16",
+    "struct"
+  ],
+  "Long File": [
+    "pyex-struct-long-file",
+    "PX-S17",
+    "struct"
+  ],
+  "Too Many Branches": [
+    "pyex-struct-too-many-branches",
+    "PX-S18",
+    "struct"
+  ]
+}

@@ -1,9 +1,10 @@
+import builtins
+import keyword
 import logging
-import operator
 import re
 from collections import defaultdict
 from dataclasses import dataclass
-from itertools import combinations, product
+from itertools import combinations, permutations, product
 
 import astroid
 from astroid import exceptions as astroid_exceptions
@@ -47,21 +48,25 @@ class CodeSmellDetector:
         """
         self.code_smells = []
         self.thresholds = thresholds
+        self.errors = []  # files that could not be analyzed, filled by the caller
         # Cross-file accumulation for smells needing multi-file context
         self._global_class_methods = defaultdict(list)
-        self._global_param_groups = defaultdict(list)
+        self._global_class_bases = {}  # (class_name, file_path) -> frozenset of base names
+        self._global_param_funcs = []  # (func_name, file_path, frozenset(params))
         self._global_code_blocks = defaultdict(list)
         self._global_class_info = {}
         self._global_class_hierarchies = defaultdict(list)
-
-        # Direction A: project-wide scope/reference registry accumulated per file
-        # and finalized in detect_cross_file_smells(). Replaces per-file,
-        # name-only guessing with resolved definitions, imports, and references.
-        self._project_defs = {}           # file_path -> {"functions": set, "classes": set}
-        self._project_import_aliases = {} # file_path -> {local_alias: origin}
-        self._project_exports = set()     # names listed in any module's __all__
-        self._project_references = set()   # every name referenced anywhere in the project
-        self._dead_candidates = []        # (name, file_path, lineno, public_decorator, exported)
+        # (smell name, group key, file_path) -> per-file finding, so a cross-file
+        # finding for the same group can replace it instead of double counting
+        self._file_findings = {}
+        # Attribute names read on objects other than self, project-wide, and the
+        # Temporary Field findings whose fields may turn out to be read elsewhere
+        self._attr_reads = set()
+        self._temp_field_findings = []
+        # Private module functions and methods per file, and every name referenced
+        # anywhere, for the project-wide Dead Code pass
+        self._private_defs = []
+        self._referenced_names = set()
 
     def detect_smells(self, file_path):
         """
@@ -82,14 +87,13 @@ class CodeSmellDetector:
             (self.detect_comments, "detect_comments"),
             (self.detect_duplicate_code, "detect_duplicate_code"),
             (self.detect_speculative_generality, "detect_speculative_generality"),
-            (self.detect_dead_code, "detect_dead_code"),
             (self.detect_feature_envy, "detect_feature_envy"),
             (self.detect_inappropriate_intimacy, "detect_inappropriate_intimacy"),
             (self.detect_message_chains, "detect_message_chains"),
             (self.detect_middle_man, "detect_middle_man"),
-            (self.detect_magic_numbers, "detect_magic_numbers"),
-            (self.detect_magic_strings, "detect_magic_strings"),
-            (self.detect_constant_conditions, "detect_constant_conditions")
+            (self.detect_data_class, "detect_data_class"),
+            (self.detect_lazy_class, "detect_lazy_class"),
+            (self.detect_dead_code, "detect_dead_code"),
         ]
 
         try:
@@ -99,18 +103,20 @@ class CodeSmellDetector:
             try:
                 module = astroid.parse(content)
             except astroid_exceptions.AstroidSyntaxError as e:
-                logger.error(f"Syntax error in {file_path}: {str(e)}")
+                cause = e.error if isinstance(getattr(e, 'error', None), SyntaxError) else None
                 raise CodeAnalysisError(
-                    message=f"Failed to parse Python file: {str(e)}",
+                    message=f"SyntaxError: {cause.msg if cause else e} (line {getattr(cause, 'lineno', '?')})",
                     file_path=file_path,
-                    line_number=getattr(e, 'lineno', None)
+                    line_number=getattr(cause, 'lineno', None)
                 )
 
             self.file_content = content.split('\n')
-
-            # Direction A: record this file's definitions, imports, and references
-            # into the project-wide registry before per-file detection runs.
-            self._register_file_scope(module, file_path)
+            # Computed once per file, shared by several detectors
+            self._module_names = self._imported_names(module)
+            self._file_attr_reads = {
+                n.attrname for n in module.nodes_of_class(nodes.Attribute)
+                if not (isinstance(n.expr, nodes.Name) and n.expr.name in ('self', 'cls'))}
+            self._attr_reads.update(self._file_attr_reads)
 
             # Run each detection method
             for detect_method, method_name in detection_methods:
@@ -128,6 +134,8 @@ class CodeSmellDetector:
                         function_name=method_name
                     )
 
+        except CodeAnalysisError:
+            raise
         except UnicodeDecodeError as e:
             logger.error(f"Encoding error in {file_path}: {str(e)}")
             raise CodeAnalysisError(
@@ -141,104 +149,35 @@ class CodeSmellDetector:
                 file_path=file_path
             )
 
-    def _register_file_scope(self, module, file_path):
-        """Collect definitions, import aliases, exports, and references for one file.
-
-        Feeds the project-wide registry used by the scope-aware detectors
-        (Direction A). Runs per file inside detect_smells(); cross-file
-        finalization happens later in detect_cross_file_smells().
-        """
-        defs = {"functions": set(), "classes": set()}
-        import_aliases = {}
-        references = set()
-
-        # Top-level definitions provided by this file
-        for node in module.body:
-            if isinstance(node, nodes.FunctionDef):
-                defs["functions"].add(node.name)
-            elif isinstance(node, nodes.ClassDef):
-                defs["classes"].add(node.name)
-
-        # Import aliases: `import x` and `from m import y [as z]`
-        # astroid exposes Import/ImportFrom.names as (name, asname) tuples.
-        for node in module.nodes_of_class(nodes.Import):
-            for name, asname in node.names:
-                local = asname or name
-                import_aliases[local] = name
-                references.add(local)
-        for node in module.nodes_of_class(nodes.ImportFrom):
-            for name, asname in node.names:
-                local = asname or name
-                origin = f"{node.modname}.{name}" if node.modname else name
-                import_aliases[local] = origin
-                references.add(local)
-
-        # Names exported via `__all__` are part of the public API
-        for node in module.nodes_of_class(nodes.Assign):
-            targets = node.targets
-            if (len(targets) == 1 and isinstance(targets[0], nodes.AssignName)
-                    and targets[0].name == '__all__'
-                    and isinstance(node.value, nodes.List)):
-                for elt in node.value.elts:
-                    if isinstance(elt, nodes.Const) and isinstance(elt.value, str):
-                        self._project_exports.add(elt.value)
-
-        # Every referenced Name (calls, receivers, bases, decorators) and attribute
-        for node in module.nodes_of_class(nodes.Name):
-            if node.name != 'self':
-                references.add(node.name)
-        for node in module.nodes_of_class(nodes.Attribute):
-            references.add(node.attrname)
-
-        self._project_defs[file_path] = defs
-        self._project_import_aliases[file_path] = import_aliases
-        self._project_references.update(references)
-
-    def _all_defined_names(self):
-        """Union of all function and class names defined across parsed files."""
-        names = set()
-        for defs in self._project_defs.values():
-            names.update(defs["functions"])
-            names.update(defs["classes"])
-        return names
-
     def detect_long_methods(self, module, file_path):
         """
-        Detect long methods in the given module.
+        Detect long methods in the given module: functions with more than
+        LONG_METHOD_LINES lines that are neither blank, comments nor docstring.
         """
         for node in module.nodes_of_class(nodes.FunctionDef):
-            # Skip property decorators and simple getter/setters
-            if node.decorators:
-                is_property = False
-                for decorator in node.decorators.nodes:
-                    # Handle both direct name and call decorators
-                    if isinstance(decorator, nodes.Name) and decorator.name == 'property':
-                        is_property = True
-                        break
-                    elif isinstance(decorator, nodes.Call) and isinstance(decorator.func, nodes.Name) and decorator.func.name == 'property':
-                        is_property = True
-                        break
-                if is_property:
-                    continue
+            # Skip properties
+            if 'property' in self._decorator_names(node):
+                continue
 
-            # Count non-empty, non-comment lines
+            doc = node.doc_node
+            doc_lines = range(doc.lineno, doc.end_lineno + 1) if doc is not None else ()
             actual_lines = 0
-            for line_no in range(node.fromlineno, node.tolineno + 1):
-                if line_no <= len(self.file_content):
-                    line = self.file_content[line_no - 1].strip()
-                    if line and not line.startswith('#'):
-                        actual_lines += 1
+            for line_no in range(node.fromlineno, min(node.tolineno, len(self.file_content)) + 1):
+                line = self.file_content[line_no - 1].strip()
+                if line and not line.startswith('#') and line_no not in doc_lines:
+                    actual_lines += 1
 
             if actual_lines > self.thresholds["LONG_METHOD_LINES"]:
                 parent_class = node.parent.name if isinstance(node.parent, nodes.ClassDef) else None
                 display_name = f"{parent_class}.{node.name}" if parent_class else node.name
-                self.code_smells.append(CodeSmell(
+                self.add_smell(
                     name="Long Method",
                     description=f"'{display_name}' has {actual_lines} lines in {file_path} at line {node.lineno}",
                     file_path=file_path,
                     module_class=display_name,
-                    line_number=node.lineno
-                ))
+                    line_number=node.lineno,
+                    severity='high' if actual_lines > 2 * self.thresholds["LONG_METHOD_LINES"] else 'medium'
+                )
 
     def detect_large_classes(self, module, file_path):
         """
@@ -262,8 +201,7 @@ class CodeSmellDetector:
                             is_dataclass = True
                             break
 
-            if (is_dataclass or
-                    any(base.name.endswith('Exception') for base in node.bases if isinstance(base, nodes.Name))):
+            if is_dataclass or self._is_exception_class(node):
                 continue
 
             # Count non-trivial methods (exclude simple getters/setters)
@@ -288,171 +226,67 @@ class CodeSmellDetector:
                     line_number=node.lineno
                 )
 
-    PRIMITIVE_TYPE_NAMES = frozenset({'int', 'float', 'str', 'bool', 'bytes', 'complex'})
-
-    def _annotation_map(self, node):
-        """Map each positional parameter to its annotation node (or None).
-
-        astroid stores annotations in a flat list that, depending on version,
-        aligns either with ``posonlyargs + args`` or with ``args`` alone. Both
-        layouts are handled so annotations are never misattributed.
-        """
-        posonly = list(getattr(node.args, 'posonlyargs', None) or [])
-        args = list(node.args.args)
-        annotations = list(node.args.annotations or [])
-        if len(annotations) == len(posonly) + len(args):
-            positional = posonly + args
-        elif len(annotations) == len(args):
-            positional = args
-        else:
-            positional = args
-            annotations = []
-        return {id(arg): (annotations[i] if i < len(annotations) else None)
-                for i, arg in enumerate(positional)}, positional
-
-    @classmethod
-    def _is_primitive_annotation(cls, annotation):
-        """True when the annotation names a builtin scalar type."""
-        if isinstance(annotation, nodes.Name):
-            return annotation.name in cls.PRIMITIVE_TYPE_NAMES
-        # String forward-reference such as `a: "int"`
-        if isinstance(annotation, nodes.Const) and isinstance(annotation.value, str):
-            return annotation.value in cls.PRIMITIVE_TYPE_NAMES
-        return False
-
-    @staticmethod
-    def _scalar_used_names(node):
-        """Names used in scalar-shaped expressions (arithmetic, comparison).
-
-        Provides the evidence used to infer a scalar type for parameters that
-        carry no annotation, which is the common case in Python code.
-        """
-        names = set()
-
-        for binop in node.nodes_of_class(nodes.BinOp):
-            for operand in (binop.left, binop.right):
-                if isinstance(operand, nodes.Name):
-                    names.add(operand.name)
-
-        for aug in node.nodes_of_class(nodes.AugAssign):
-            if isinstance(aug.target, nodes.Name):
-                names.add(aug.target.name)
-
-        for cmp in node.nodes_of_class(nodes.Compare):
-            left = cmp.left
-            for _, right in cmp.ops:
-                if isinstance(left, nodes.Name) and isinstance(right, nodes.Const):
-                    names.add(left.name)
-                if isinstance(right, nodes.Name) and isinstance(left, nodes.Const):
-                    names.add(right.name)
-                left = right
-
-        return names
-
     def detect_primitive_obsession(self, module, file_path):
         """
-        Detect primitive obsession in the given module.
-
-        A positional parameter counts as primitive when it is annotated with a
-        builtin scalar type, or - for unannotated parameters - when its usage
-        shows scalar behaviour (arithmetic, comparison against a literal, or a
-        scalar default). Unannotated code is the norm in Python, so ignoring it
-        silently missed genuine cases; the two routes are reported separately so
-        the inferred ones carry visible lower confidence.
+        Detect primitive obsession: functions taking more than
+        PRIMITIVE_OBSESSION_COUNT parameters annotated as int/str/float/bool,
+        making up over 70% of their parameters.
         """
         for node in module.nodes_of_class(nodes.FunctionDef):
-            ann_map, positional = self._annotation_map(node)
-
+            params = self._parameters(node)
             # Skip if it's a small number of total arguments
-            if len(positional) <= 3:
+            if len(params) <= 3:
                 continue
 
-            if positional and positional[0].name in {'self', 'cls'}:
-                positional = positional[1:]
-            if not positional:
-                continue
-
-            scalar_names = self._scalar_used_names(node)
-
-            # Defaults bind to the trailing positional parameters
-            default_scalars = set()
-            defaults = list(node.args.defaults or [])
-            if defaults:
-                for arg, default in zip(positional[-len(defaults):], defaults):
-                    if isinstance(default, nodes.Const) and isinstance(
-                            default.value, (int, float, str, bool, bytes, complex)):
-                        default_scalars.add(arg.name)
-
-            explicit = 0
-            inferred = 0
-            for arg in positional:
-                if not isinstance(arg, nodes.AssignName):
-                    continue
-                annotation = ann_map.get(id(arg))
-                if annotation is not None:
-                    # An explicit non-scalar annotation is trusted over usage
-                    if self._is_primitive_annotation(annotation):
-                        explicit += 1
-                    continue
-                if arg.name in scalar_names or arg.name in default_scalars:
-                    inferred += 1
-
-            primitives = explicit + inferred
-            primitive_ratio = primitives / len(positional)
-
-            if (primitives > self.thresholds["PRIMITIVE_OBSESSION_COUNT"] and
-                    primitive_ratio > 0.7):  # More than 70% primitives
-                detail = (f"{explicit} annotated, {inferred} inferred from scalar usage"
-                          if inferred else f"{explicit} annotated")
-                self.code_smells.append(CodeSmell(
+            primitives = [arg for arg, annotation in params
+                          if isinstance(annotation, nodes.Name) and
+                          annotation.name in ('int', 'str', 'float', 'bool')]
+            if (len(primitives) > self.thresholds["PRIMITIVE_OBSESSION_COUNT"] and
+                    len(primitives) / len(params) > 0.7):  # More than 70% primitives
+                self.add_smell(
                     name="Primitive Obsession",
-                    description=(f"'{node.name}' has {primitives} primitive parameters "
-                                 f"({detail}) in {file_path}"),
+                    description=f"'{node.name}' has {len(primitives)} primitive parameters in {file_path}",
                     file_path=file_path,
                     module_class=node.name,
-                    line_number=node.lineno
-                ))
+                    line_number=node.lineno,
+                    severity='low'
+                )
 
     def detect_long_parameter_lists(self, module, file_path):
         """
-        Detect long parameter lists in the given module.
+        Detect long parameter lists, counting positional-only, regular and
+        keyword-only parameters but not self / cls.
         """
         for node in module.nodes_of_class(nodes.FunctionDef):
-            args = node.args.args
-
             # Skip if it's a constructor
             if node.name == '__init__':
                 continue
 
-            # Skip 'self' in method parameter count
-            if args and args[0].name == 'self':
-                args = args[1:]
+            count = len(self._parameters(node))
+            # Allow two more parameters when the function also takes *args / **kwargs
+            threshold = self.thresholds["LONG_PARAMETER_LIST"]
+            if node.args.vararg or node.args.kwarg:
+                threshold += 2
 
-            # Check for **kwargs or *args
-            has_var_args = node.args.vararg is not None
-            has_kwargs = node.args.kwarg is not None
-
-            # Reduce severity if function has variable arguments
-            threshold = (
-                self.thresholds["LONG_PARAMETER_LIST"] + 2
-                if (has_var_args or has_kwargs)
-                else self.thresholds["LONG_PARAMETER_LIST"]
-            )
-
-            if len(args) > threshold:
-                self.code_smells.append(CodeSmell(
+            if count > threshold:
+                self.add_smell(
                     name="Long Parameter List",
-                    description=f"'{node.name}' has {len(args)} parameters in {file_path}",
+                    description=f"'{node.name}' has {count} parameters in {file_path}",
                     file_path=file_path,
                     module_class=node.name,
-                    line_number=node.lineno
-                ))
+                    line_number=node.lineno,
+                    severity='medium'
+                )
 
     def detect_data_clumps(self, module, file_path):
         """
         Detect data clumps in the given module.
+
+        A data clump is a maximal set of at least DATA_CLUMPS_THRESHOLD parameters
+        shared by two or more functions. Only maximal shared sets are reported,
+        not each of their subsets.
         """
-        parameter_groups = defaultdict(list)
+        funcs = []
         for node in module.nodes_of_class(nodes.FunctionDef):
             # Skip if it's a constructor or property
             if node.name == '__init__' or (node.decorators and
@@ -460,54 +294,62 @@ class CodeSmellDetector:
                                                for d in node.decorators.nodes)):
                 continue
 
-            # Get parameters excluding self
-            params = [arg.name for arg in node.args.args
-                      if isinstance(arg, nodes.AssignName) and arg.name != 'self']
+            # Get parameters excluding self / cls
+            params = frozenset(arg.name for arg, _ in self._parameters(node))
 
             # Skip if too few parameters
             if len(params) < self.thresholds["DATA_CLUMPS_THRESHOLD"]:
                 continue
 
-            # Create combinations of parameters that appear together
-            for size in range(3, len(params) + 1):
-                for combo in combinations(sorted(params), size):
-                    parameter_groups[combo].append(node.name)
+            funcs.append((node.name, params))
+            self._global_param_funcs.append((node.name, file_path, params))
 
-        for params, functions in parameter_groups.items():
-            # Only report if parameters appear together in multiple functions
-            # and represent a significant portion of each function's parameters
-            if (len(functions) > 1 and
-                    len(params) >= self.thresholds["DATA_CLUMPS_THRESHOLD"]):
-                self.add_smell(
-                    name="Data Clumps",
-                    description=f"Parameters {', '.join(params)} appear together in functions: {', '.join(functions)} in {file_path}",
-                    file_path=file_path,
-                    module_class=', '.join(functions),
-                    line_number=None,
-                    severity='medium'
-                )
+        for params, members in self._maximal_param_groups([p for _, p in funcs]).items():
+            names = [funcs[i][0] for i in members]
+            self._file_findings[("Data Clumps", params, file_path)] = self.add_smell(
+                name="Data Clumps",
+                description=f"Parameters {', '.join(sorted(params))} appear together in functions: {', '.join(names)} in {file_path}",
+                file_path=file_path,
+                module_class=', '.join(names),
+                line_number=None,
+                severity='medium'
+            )
 
-        # Accumulate for cross-file detection
-        for params, func_names in parameter_groups.items():
-            for func_name in func_names:
-                self._global_param_groups[params].append((func_name, file_path))
+    def _maximal_param_groups(self, param_sets):
+        """
+        Map each maximal shared parameter set (size >= DATA_CLUMPS_THRESHOLD) to the
+        indices of every function whose parameters contain it.
+
+        Every such set is the intersection of some pair of functions, so pairwise
+        intersections enumerate them all without generating subsets.
+        """
+        # ponytail: O(n^2) over functions with >= threshold params; fine since those are rare
+        groups = {}
+        for i, j in combinations(range(len(param_sets)), 2):
+            shared = param_sets[i] & param_sets[j]
+            if len(shared) >= self.thresholds["DATA_CLUMPS_THRESHOLD"] and shared not in groups:
+                groups[shared] = [k for k, p in enumerate(param_sets) if shared <= p]
+        return groups
 
     def detect_switch_statements(self, module, file_path):
         """
         Detect switch statements in the given module.
         """
+        def is_elif(node):
+            parent = node.parent
+            return isinstance(parent, nodes.If) and len(parent.orelse) == 1 and parent.orelse[0] is node
+
         def count_conditions(node):
-            count = 1  # Start with 1 for the initial if
-            for else_node in node.orelse:
-                if isinstance(else_node, nodes.If):
-                    count += 1
-                elif isinstance(else_node, nodes.Expr):
-                    continue  # Skip comments or docstrings
+            """Number of conditions (if + each elif) in the chain starting at node."""
+            count = 1
+            while len(node.orelse) == 1 and isinstance(node.orelse[0], nodes.If):
+                node = node.orelse[0]
+                count += 1
             return count
 
         for node in module.nodes_of_class(nodes.If):
-            # Skip simple if/else statements
-            if not node.orelse:
+            # Skip simple if statements and elif links (each chain is measured from its head)
+            if not node.orelse or is_elif(node):
                 continue
 
             # Check if this is part of a try/except block
@@ -516,28 +358,38 @@ class CodeSmellDetector:
 
             condition_count = count_conditions(node)
 
-            # Check for common valid patterns
-            is_guard_clause = len(node.body) <= 2 and isinstance(node.test, nodes.Compare)
+            # Check for common valid patterns (a node with an else is never a guard clause)
             is_type_check = isinstance(
                 node.test, nodes.Call) and getattr(
                 node.test.func, 'name', '') == 'isinstance'
 
-            if (condition_count > self.thresholds["COMPLEX_CONDITIONAL"] and
-                not is_guard_clause and
-                    not is_type_check):
-                self.code_smells.append(CodeSmell(
+            if condition_count > self.thresholds["COMPLEX_CONDITIONAL"] and not is_type_check:
+                self.add_smell(
                     name="Switch Statements",
                     description=f"Complex conditional with {condition_count} branches at line {node.lineno} in {file_path}",
                     file_path=file_path,
                     module_class=None,
                     line_number=node.lineno,
                     severity='medium'
-                ))
+                )
+
+        for node in module.nodes_of_class(nodes.Match):
+            if len(node.cases) > self.thresholds["COMPLEX_CONDITIONAL"]:
+                self.add_smell(
+                    name="Switch Statements",
+                    description=f"match statement with {len(node.cases)} cases at line {node.lineno} in {file_path}",
+                    file_path=file_path,
+                    module_class=None,
+                    line_number=node.lineno,
+                    severity='medium'
+                )
 
     def detect_temporary_fields(self, module, file_path):
         """
-        Detect temporary fields in the given module.
+        Detect temporary fields: attributes assigned on self in __init__ that no
+        other method of the class reads and no code reads through another object.
         """
+        module_reads = self._file_attr_reads
         for node in module.nodes_of_class(nodes.ClassDef):
             # Skip data classes and exception classes
             is_dataclass = False
@@ -556,8 +408,7 @@ class CodeSmellDetector:
                             is_dataclass = True
                             break
 
-            if (is_dataclass or
-                    any(base.name.endswith('Exception') for base in node.bases if isinstance(base, nodes.Name))):
+            if is_dataclass or self._is_exception_class(node):
                 continue
 
             init_fields = set()
@@ -567,40 +418,48 @@ class CodeSmellDetector:
             for child in node.body:
                 if isinstance(child, nodes.FunctionDef):
                     if child.name == '__init__':
-                        for target in child.nodes_of_class(nodes.AssignName):
-                            # Check if field has a comment indicating it's for caching
-                            if any(isinstance(sibling, nodes.Expr) and
-                                   isinstance(sibling.value, nodes.Const) and
-                                   'cache' in str(sibling.value.value).lower()
-                                   for sibling in child.body):
-                                cached_fields.add(target.name)
-                            else:
-                                init_fields.add(target.name)
+                        # Check if __init__ has a comment indicating its fields are for caching
+                        is_cache = any(isinstance(sibling, nodes.Expr) and
+                                       isinstance(sibling.value, nodes.Const) and
+                                       'cache' in str(sibling.value.value).lower()
+                                       for sibling in child.body)
+                        # Fields are attributes assigned on self, not parameters or locals
+                        for target in child.nodes_of_class(nodes.AssignAttr):
+                            if isinstance(target.expr, nodes.Name) and target.expr.name == 'self':
+                                (cached_fields if is_cache else init_fields).add(target.attrname)
                     else:
                         used_fields.update(
                             n.attrname for n in child.nodes_of_class(nodes.Attribute)
                             if isinstance(n.expr, nodes.Name) and n.expr.name == 'self'
                         )
 
-            # Exclude common patterns and cached fields
-            temp_fields = (init_fields - used_fields - cached_fields -
+            # Exclude common patterns, cached fields and fields read through another
+            # object in this file; reads in other files are removed in the cross-file pass
+            temp_fields = (init_fields - used_fields - cached_fields - module_reads -
                            {'logger', 'config', 'cache', '_cache'})
 
             if len(temp_fields) >= self.thresholds["TEMPORARY_FIELD_THRESHOLD"]:
-                self.add_smell(
+                smell = self.add_smell(
                     name="Temporary Field",
-                    description=f"Potentially unused fields {', '.join(temp_fields)} in class '{node.name}' at line {node.lineno} in {file_path}",
+                    description=self._temporary_field_description(temp_fields, node.name, node.lineno, file_path),
                     file_path=file_path,
                     module_class=node.name,
                     line_number=node.lineno,
                     severity='low'
                 )
+                self._temp_field_findings.append((smell, temp_fields))
+
+    @staticmethod
+    def _temporary_field_description(fields, class_name, lineno, file_path):
+        return (f"Potentially unused fields {', '.join(sorted(fields))} in class '{class_name}' "
+                f"at line {lineno} in {file_path}")
 
     def detect_alternative_classes(self, module, file_path):
         """
         Detect alternative classes with different interfaces in the given module.
         """
         class_methods = defaultdict(list)
+        class_bases = {}
         for node in module.nodes_of_class(nodes.ClassDef):
             # Skip data classes, exceptions, and abstract base classes
             is_excluded = False
@@ -637,20 +496,14 @@ class CodeSmellDetector:
                 continue
 
             class_methods[methods].append(node.name)
+            class_bases[node.name] = frozenset(b.as_string() for b in node.bases) - {'object'}
 
         for methods, classes in class_methods.items():
             if len(classes) >= self.thresholds["ALTERNATIVE_CLASSES_THRESHOLD"]:
-                # Check if classes share a common base class
-                class_nodes = [
-                    n for n in module.nodes_of_class(
-                        nodes.ClassDef) if n.name in classes]
-                share_base_class = len({base.name for n in class_nodes
-                                        for base in n.bases if isinstance(base, nodes.Name)}) > 0
-
-                if not share_base_class:
-                    self.add_smell(
+                if not self._share_base(class_bases[c] for c in classes):
+                    self._file_findings[("Alternative Classes", methods, file_path)] = self.add_smell(
                         name="Alternative Classes with Different Interfaces",
-                        description=f"Classes {', '.join(classes)} share similar methods {', '.join(methods)} in {file_path}",
+                        description=f"Classes {', '.join(classes)} share similar methods {', '.join(sorted(methods))} in {file_path}",
                         file_path=file_path,
                         module_class=', '.join(classes),
                         line_number=None,
@@ -661,6 +514,12 @@ class CodeSmellDetector:
         for methods, class_names in class_methods.items():
             for class_name in class_names:
                 self._global_class_methods[methods].append((class_name, file_path))
+                self._global_class_bases[(class_name, file_path)] = class_bases[class_name]
+
+    @staticmethod
+    def _share_base(base_sets):
+        """True if all classes in a group have at least one base class in common."""
+        return bool(frozenset.intersection(*base_sets))
 
     def detect_divergent_change(self, module, file_path):
         """
@@ -712,7 +571,8 @@ class CodeSmellDetector:
                 if (method.name.startswith('__') or is_property or method.name.startswith('_')):
                     continue
 
-                prefix = method.name.split('_')[0]
+                # First word of snake_case or camelCase names: get_user / getUser -> get
+                prefix = re.split(r'_|(?<=[a-z0-9])(?=[A-Z])', method.name)[0].lower()
                 # Skip common CRUD and utility prefixes
                 if prefix not in {'get', 'set', 'is', 'has',
                                   'validate', 'create', 'update', 'delete'}:
@@ -723,7 +583,7 @@ class CodeSmellDetector:
                     len(method_prefixes) > self.thresholds["DIVERGENT_CHANGE_METHODS"]):
                 self.add_smell(
                     name="Potential Divergent Change",
-                    description=f"Class '{node.name}' has {len(unique_prefixes)} different method prefixes: {', '.join(unique_prefixes)} in {file_path}",
+                    description=f"Class '{node.name}' has {len(unique_prefixes)} different method prefixes: {', '.join(sorted(unique_prefixes))} in {file_path}",
                     file_path=file_path,
                     module_class=node.name,
                     line_number=node.lineno,
@@ -757,11 +617,10 @@ class CodeSmellDetector:
 
         if len(class_hierarchies) > 1:
             parallel_hierarchies = []
-            for h1, h2 in combinations(class_hierarchies.values(), 2):
+            for (b1, h1), (b2, h2) in combinations(class_hierarchies.items(), 2):
                 if len(h1) > 1 and len(h2) > 1:
                     # Check for naming patterns
-                    if any(c1.replace(h1[0], '') == c2.replace(h2[0], '')
-                           for c1, c2 in product(h1, h2)):
+                    if self._names_correspond(b1, h1, b2, h2):
                         # Check for method similarity
                         if (h1[0] in class_info and h2[0] in class_info and
                                 (class_info[h1[0]] or class_info[h2[0]])):  # Ensure at least one set has methods
@@ -781,6 +640,18 @@ class CodeSmellDetector:
                     severity='high'
                 )
 
+    @staticmethod
+    def _names_correspond(b1, h1, b2, h2):
+        """
+        True if a child of base b1 and a child of base b2 share a name stem once the
+        base name is removed (XmlReader/XmlWriter, Dog/DogOwner).
+        """
+        for c1, c2 in product(h1, h2):
+            s1, s2 = c1.replace(b1, ''), c2.replace(b2, '')
+            if s1 and s2 and (s1.startswith(s2) or s2.startswith(s1)):
+                return True
+        return False
+
     def detect_shotgun_surgery(self, module, file_path):
         """
         Detect potential shotgun surgery in the given module.
@@ -789,9 +660,12 @@ class CodeSmellDetector:
         for node in module.body:
             for call in node.nodes_of_class(nodes.Call):
                 if isinstance(call.func, nodes.Name):
-                    # Skip common utility methods and logging
-                    if call.func.name.lower() in {'log', 'print', 'str',
-                                                  'len', 'isinstance', 'super'}:
+                    # Skip common utility methods, logging and builtins
+                    if (call.func.name.lower() in {'log', 'print', 'str',
+                                                   'len', 'isinstance', 'super'} or
+                            call.func.name in vars(builtins) or
+                            call.func.name.endswith(('Error', 'Exception', 'Warning')) or
+                            isinstance(call.parent, nodes.Raise)):
                         continue
 
                     # Store both line number and context
@@ -806,14 +680,14 @@ class CodeSmellDetector:
             unique_contexts = len(set(context for _, context in calls))
             if (len(calls) > self.thresholds["SHOTGUN_SURGERY_CALLS"] and
                     unique_contexts > self.thresholds["SHOTGUN_SURGERY_CONTEXTS"]):
-                self.code_smells.append(CodeSmell(
+                self.add_smell(
                     name="Potential Shotgun Surgery",
                     description=f"Method '{method}' called in {unique_contexts} different contexts across {len(calls)} locations in {file_path}",
                     file_path=file_path,
                     module_class=method,
                     line_number=calls[0][0],
                     severity='high'
-                ))
+                )
 
     def detect_comments(self, module, file_path):
         """
@@ -852,14 +726,14 @@ class CodeSmellDetector:
 
         if (comment_ratio > self.thresholds["EXCESSIVE_COMMENTS_RATIO"] and
                 large_comment_blocks > self.thresholds["LARGE_COMMENT_BLOCKS"]):
-            self.code_smells.append(CodeSmell(
+            self.add_smell(
                 name="Excessive Comments",
                 description=f"File has {comment_ratio:.1%} comment ratio with {large_comment_blocks} large comment blocks in {file_path}",
                 file_path=file_path,
                 module_class=None,
                 line_number=None,
                 severity='low'
-            ))
+            )
 
     def detect_duplicate_code(self, module, file_path):
         """
@@ -867,13 +741,13 @@ class CodeSmellDetector:
         """
         def normalize_code(node):
             """Normalize code by removing variable names and whitespace."""
+            # as_string() carries no comments, so only identifiers and whitespace need handling
             code = node.as_string()
-            # Replace variable names with placeholders
-            code = re.sub(r'\b[a-zA-Z_]\w*\b', 'VAR', code)
-            # Remove whitespace and comments
-            code = re.sub(r'\s+', '', code)
-            code = re.sub(r'#.*$', '', code, flags=re.MULTILINE)
-            return code
+            # Replace variable names (not keywords) with placeholders
+            code = re.sub(r'\b[a-zA-Z_]\w*\b',
+                          lambda m: m.group() if keyword.iskeyword(m.group()) else 'VAR', code)
+            # Remove whitespace
+            return re.sub(r'\s+', '', code)
 
         code_blocks = defaultdict(list)
         for node in module.nodes_of_class(nodes.FunctionDef):
@@ -892,14 +766,14 @@ class CodeSmellDetector:
         for block, functions in code_blocks.items():
             if len(functions) >= self.thresholds["DUPLICATE_CODE_THRESHOLD"]:
                 total_lines = sum(lines for _, lines in functions)
-                self.code_smells.append(CodeSmell(
+                self._file_findings[("Duplicate Code", block, file_path)] = self.add_smell(
                     name="Duplicate Code",
                     description=f"Similar code found in functions: {', '.join(f[0] for f in functions)} ({total_lines} total lines) in {file_path}",
                     file_path=file_path,
                     module_class=', '.join(f[0] for f in functions),
                     line_number=None,
                     severity='high'
-                ))
+                )
 
         # Accumulate for cross-file detection
         for normalized_code, functions in code_blocks.items():
@@ -908,181 +782,158 @@ class CodeSmellDetector:
 
     def detect_data_class(self, module, file_path):
         """
-        Detect data classes in the given module.
+        Detect data classes: classes whose only methods are one-statement get_* /
+        set_* accessors (at least DATA_CLASS_METHODS of them).
         """
-        for node in module.body:
-            if isinstance(node, nodes.ClassDef):
-                # Skip if it's already a dataclass or an exception
-                if (any(decorator.name == 'dataclass' for decorator in node.decorators.nodes) if node.decorators else False or
-                        any(base.name.endswith('Exception') for base in node.bases if isinstance(base, nodes.Name))):
-                    continue
+        for node in module.nodes_of_class(nodes.ClassDef):
+            # Skip declared data holders and exceptions
+            if ('dataclass' in self._decorator_names(node) or self._is_exception_class(node) or
+                    node.name.endswith(('DTO', 'Model', 'Entity', 'Record'))):
+                continue
 
-                methods = list(node.mymethods())
+            getters = setters = others = 0
+            for method in node.mymethods():
+                if method.name.startswith('__'):
+                    continue  # Skip magic methods
+                elif method.name.startswith('get_') and len(method.body) == 1:
+                    getters += 1
+                elif method.name.startswith('set_') and len(method.body) == 1:
+                    setters += 1
+                else:
+                    others += 1
 
-                # Skip empty classes or those with no methods
-                if not methods:
-                    continue
-
-                # Count different types of methods
-                getters = 0
-                setters = 0
-                others = 0
-
-                for method in methods:
-                    if method.name.startswith('__'):
-                        continue  # Skip magic methods
-                    elif method.name.startswith('get_') and len(method.body) == 1:
-                        getters += 1
-                    elif method.name.startswith('set_') and len(method.body) == 1:
-                        setters += 1
-                    else:
-                        others += 1
-
-                # Only flag if class is predominantly getters/setters
-                if (others == 0 and getters + setters >= self.thresholds["DATA_CLASS_METHODS"] and
-                        # Skip known data structures
-                        not node.name.endswith(('DTO', 'Model', 'Entity', 'Record'))):
-                    self.code_smells.append(CodeSmell(
-                        name="Data Class",
-                        description=f"Class '{node.name}' has {getters} getters and {setters} setters with no other methods in {file_path}",
-                        file_path=file_path,
-                        module_class=node.name,
-                        line_number=node.lineno,
-                        severity='medium'
-                    ))
+            # Only flag if class is purely getters/setters
+            if others == 0 and getters + setters >= self.thresholds["DATA_CLASS_METHODS"]:
+                self.add_smell(
+                    name="Data Class",
+                    description=f"Class '{node.name}' has {getters} getters and {setters} setters with no other methods in {file_path}",
+                    file_path=file_path,
+                    module_class=node.name,
+                    line_number=node.lineno,
+                    severity='low'
+                )
 
     def detect_dead_code(self, module, file_path):
         """
-        Collect candidate dead functions for project-wide resolution.
-
-        Per-file name matching alone cannot tell whether a function is consumed
-        by another module, a test, an entry point, or the public API. Candidates
-        are therefore deferred to _finalize_dead_code(), which consults the
-        project-wide registry after every file has been parsed (Direction A).
+        Collect private module-level functions and private methods (one leading
+        underscore) and every name the module refers to. Unreferenced ones are
+        reported by the cross-file pass, once all files have been seen.
         """
-        for node in module.body:
-            if not isinstance(node, nodes.FunctionDef):
+        for node in module.nodes_of_class(nodes.FunctionDef):
+            if not (node.name.startswith('_') and not node.name.startswith('__')):
                 continue
-            # Skip test functions and property methods
-            if (node.name.startswith('test_') or
-                    (node.decorators and any(
-                        isinstance(d, nodes.Name) and d.name == 'property'
-                        for d in node.decorators.nodes))):
+            # Decorated functions are usually registered somewhere (routes, hooks,
+            # properties, overloads) and are reachable without being named
+            if node.decorators or not isinstance(node.parent, (nodes.Module, nodes.ClassDef)):
                 continue
+            owner = node.parent.name if isinstance(node.parent, nodes.ClassDef) else None
+            # ponytail: any base may call a private hook (HelpFormatter._format_usage);
+            # resolving which bases are project classes would let subclasses be checked too
+            if owner and {b.as_string() for b in node.parent.bases} - {'object'}:
+                continue
+            self._private_defs.append((node.name, owner, file_path, node.lineno))
 
-            # Decorators suggesting public/external use (routes, API endpoints)
-            public_decorator = False
-            if node.decorators:
-                for decorator in node.decorators.nodes:
-                    if any(name in str(decorator)
-                           for name in ['api', 'route', 'endpoint', 'public', 'export']):
-                        public_decorator = True
-                        break
+        referenced = self._referenced_names
+        for node in module.nodes_of_class((nodes.Name, nodes.Attribute, nodes.AssignAttr,
+                                           nodes.ImportFrom, nodes.Const)):
+            if isinstance(node, nodes.Name):
+                referenced.add(node.name)
+            elif isinstance(node, (nodes.Attribute, nodes.AssignAttr)):
+                referenced.add(node.attrname)
+            elif isinstance(node, nodes.ImportFrom):
+                referenced.update(name for name, _ in node.names)
+            # Names in strings: __all__, getattr(self, '_handler'), dispatch tables
+            elif isinstance(node.value, str) and node.value.isidentifier():
+                referenced.add(node.value)
 
-            # Exported via this module's __all__?
-            exported = node.name in self._project_exports
-
-            self._dead_candidates.append(
-                (node.name, file_path, node.lineno, public_decorator, exported))
-
-    def _finalize_dead_code(self):
-        """Resolve candidate dead functions against the project-wide registry.
-
-        A candidate is dead only when its name appears in no project reference,
-        no import alias, and no ``__all__`` export. Confidence separates private
-        unreferenced functions (high) from public names that may be part of an
-        external API (low), instead of silently over-reporting (Direction A).
-        """
-        imported_names = set()
-        for aliases in self._project_import_aliases.values():
-            imported_names.update(aliases.keys())
-        referenced = self._project_references | imported_names | self._project_exports
-
-        # Group surviving candidates by file to preserve the per-file threshold
+    def _cross_file_dead_code(self):
+        unused = [d for d in self._private_defs if d[0] not in self._referenced_names]
         by_file = defaultdict(list)
-        for name, file_path, lineno, public_decorator, exported in self._dead_candidates:
-            if public_decorator or exported or name in referenced:
+        for name, owner, file_path, lineno in unused:
+            by_file[file_path].append((name, owner, lineno))
+        for file_path, defs in by_file.items():
+            if len(defs) < self.thresholds["DEAD_CODE_THRESHOLD"]:
                 continue
-            by_file[file_path].append((name, lineno))
-
-        threshold = self.thresholds.get("DEAD_CODE_THRESHOLD", 3)
-        for file_path, candidates in by_file.items():
-            if len(candidates) < threshold:
-                continue
-            for name, lineno in candidates:
-                confidence = ('high' if name.startswith('_')
-                               else 'low (public name; may be external API)')
+            for name, owner, lineno in defs:
+                display_name = f"{owner}.{name}" if owner else name
                 self.add_smell(
                     name="Dead Code",
-                    description=(
-                        f"Potentially unused function '{name}' in {file_path} "
-                        f"(no reference found in the analyzed project; "
-                        f"confidence: {confidence})"
-                    ),
+                    description=f"Private function '{display_name}' is never referenced in the project ({file_path})",
                     file_path=file_path,
-                    module_class=name,
+                    module_class=display_name,
                     line_number=lineno,
                     severity='low'
                 )
 
     def detect_lazy_class(self, module, file_path):
         """
-        Detect lazy classes in the given module.
+        Detect lazy classes: stand-alone classes (no bases, no decorators) with at
+        most LAZY_CLASS_METHODS methods besides dunder methods, spanning at most
+        LAZY_CLASS_LINES lines. Subclasses are skipped, since overriding one hook is how frameworks
+        are extended, and so are classes without methods (namespaces, records).
         """
-        for node in module.body:
-            if isinstance(node, nodes.ClassDef):
-                # Skip known valid small classes
-                if (any(node.name.endswith(suffix) for suffix in
-                    ['Exception', 'Error', 'Mixin', 'Interface', 'Abstract', 'Base']) or
-                        (node.decorators and any(d.name == 'dataclass' for d in node.decorators.nodes))):
-                    continue
+        for node in module.nodes_of_class(nodes.ClassDef):
+            bases = {b.as_string() for b in node.bases} - {'object'}
+            if (bases or node.decorators or node.keywords or
+                    node.name.endswith(('Mixin', 'Interface', 'Abstract', 'Base'))):
+                continue
 
-                # Count non-trivial methods
-                methods = []
-                for method in node.mymethods():
-                    # Skip magic methods and simple getters/setters
-                    if (method.name.startswith('__') or
-                            (len(method.body) == 1 and isinstance(method.body[0], (nodes.Return, nodes.Assign)))):
-                        continue
-                    methods.append(method)
+            # Classes with only dunder methods are records or namespaces, not lazy
+            all_methods = list(node.mymethods())
+            if not any(not m.name.startswith('__') for m in all_methods):
+                continue
 
-                # Check complexity of methods
-                total_lines = sum(m.tolineno - m.fromlineno for m in methods)
-                if (len(methods) <= self.thresholds["LAZY_CLASS_METHODS"] and
-                        total_lines <= self.thresholds["LAZY_CLASS_LINES"]):
-                    self.code_smells.append(CodeSmell(
-                        name="Lazy Class",
-                        description=f"Class '{node.name}' has only {len(methods)} non-trivial methods with {total_lines} total lines in {file_path}",
-                        file_path=file_path,
-                        module_class=node.name,
-                        line_number=node.lineno,
-                        severity='low'
-                    ))
+            methods = [m for m in all_methods if not m.name.startswith('__')]
+            total_lines = sum(m.tolineno - m.fromlineno for m in methods)
+            if (len(methods) <= self.thresholds["LAZY_CLASS_METHODS"] and
+                    total_lines <= self.thresholds["LAZY_CLASS_LINES"]):
+                self.add_smell(
+                    name="Lazy Class",
+                    description=f"Class '{node.name}' has only {len(methods)} method(s) with {total_lines} total lines in {file_path}",
+                    file_path=file_path,
+                    module_class=node.name,
+                    line_number=node.lineno,
+                    severity='low'
+                )
 
     def detect_speculative_generality(self, module, file_path):
         """
         Detect speculative generality in the given module.
         """
         for node in module.nodes_of_class(nodes.ClassDef):
-            # Skip legitimate abstract base classes
+            # Skip legitimate abstract base classes and typing.Protocol interfaces
             if (any(base.name.endswith('ABC') for base in node.bases if isinstance(base, nodes.Name)) or
+                    any(base.as_string().split('[')[0].split('.')[-1] == 'Protocol'
+                        for base in node.bases) or
                     node.name.endswith(('Interface', 'Base', 'Abstract'))):
                 continue
 
             abstract_methods = []
             unused_params = []
+            # A subclass method keeps the signature it overrides, used or not
+            is_subclass = bool({b.as_string() for b in node.bases} - {'object'})
 
             for method in node.mymethods():
-                # Check for empty/pass methods
-                if method.body and isinstance(method.body[0], nodes.Pass):
+                # Abstract and overload stubs declare parameters they do not use
+                if self._decorator_names(method) & {'abstractmethod', 'overload'}:
+                    continue
+
+                # Check for empty methods: a lone pass or ...
+                body = method.body
+                if len(body) == 1 and (isinstance(body[0], nodes.Pass) or (
+                        isinstance(body[0], nodes.Expr) and isinstance(body[0].value, nodes.Const)
+                        and body[0].value.value is Ellipsis)):
                     abstract_methods.append(method.name)
 
-                # Check for unused parameters
+                # Subclass methods keep the signature they override; dunder methods
+                # implement a protocol (__exit__, __get__) with a fixed signature
+                if is_subclass or method.name.startswith('__'):
+                    continue
+                # Check for unused parameters; a leading underscore marks one as intentionally unused
                 used_names = {n.name for n in method.nodes_of_class(nodes.Name)}
-                param_names = {arg.name for arg in method.args.args if arg.name != 'self'}
-                unused = param_names - used_names
-                if unused:
-                    unused_params.extend(unused)
+                unused_params.extend(sorted(
+                    arg.name for arg, _ in self._parameters(method)
+                    if arg.name not in used_names and not arg.name.startswith('_')))
 
             if (len(abstract_methods) >= self.thresholds["SPECULATIVE_GENERALITY_THRESHOLD"] or
                     len(unused_params) >= self.thresholds["UNUSED_PARAMETERS_THRESHOLD"]):
@@ -1094,19 +945,20 @@ class CodeSmellDetector:
                     description.append(
                         f"has {len(unused_params)} unused parameters: {', '.join(unused_params)}")
 
-                self.code_smells.append(CodeSmell(
+                self.add_smell(
                     name="Speculative Generality",
                     description=f"Class '{node.name}' {' and '.join(description)} in {file_path}",
                     file_path=file_path,
                     module_class=node.name,
                     line_number=node.lineno,
                     severity='medium'
-                ))
+                )
 
     def detect_feature_envy(self, module, file_path):
         """
         Detect feature envy in the given module.
         """
+        module_names = self._module_names
         for node in module.nodes_of_class(nodes.FunctionDef):
             # Skip property methods and simple delegators
             is_property = False
@@ -1125,26 +977,13 @@ class CodeSmellDetector:
                             is_property = True
                             break
 
-            if (is_property or
+            # Envy compares use of another object with use of the method's own class,
+            # so it applies to instance methods only, not to functions or static methods
+            if (is_property or not isinstance(node.parent, nodes.ClassDef) or
+                    node.name.startswith('test_') or
+                    self._decorator_names(node) & {'staticmethod', 'classmethod'} or
                     len(node.body) == 1 and isinstance(node.body[0], nodes.Return)):
                 continue
-
-            # Resolve receiver bindings inside this method (Direction A):
-            # `other = RHS` tells us what `other` actually refers to, so a
-            # receiver bound to self.* or a local utility is not envy.
-            local_bindings = {}
-            for assign in node.nodes_of_class(nodes.Assign):
-                for target in assign.targets:
-                    if not isinstance(target, nodes.AssignName):
-                        continue
-                    value = assign.value
-                    if isinstance(value, nodes.Name):
-                        local_bindings[target.name] = value.name
-                    elif (isinstance(value, nodes.Attribute)
-                          and isinstance(value.expr, nodes.Name)
-                          and value.expr.name == 'self'):
-                        # `other = self.data` → receiver derives from self
-                        local_bindings[target.name] = 'self'
 
             # Track method calls by class
             class_calls = defaultdict(int)
@@ -1152,20 +991,13 @@ class CodeSmellDetector:
 
             for sub_node in node.nodes_of_class(nodes.Attribute):
                 if isinstance(sub_node.expr, nodes.Name):
-                    receiver = sub_node.expr.name
-                    if receiver == 'self':
+                    if sub_node.expr.name in ('self', 'cls'):
                         local_calls += 1
-                        continue
-                    # Skip common utility objects
-                    if receiver.lower() in {'logger', 'config', 'utils', 'helper'}:
-                        continue
-                    # Receiver bound to self.* or a local utility → not envy
-                    bound = local_bindings.get(receiver)
-                    if bound is not None and (
-                            bound == 'self' or
-                            bound.lower() in {'logger', 'config', 'utils', 'helper'}):
-                        continue
-                    class_calls[receiver] += 1
+                    elif sub_node.expr.name not in module_names:
+                        # Skip common utility objects
+                        if sub_node.expr.name.lower() not in {
+                                'logger', 'config', 'utils', 'helper'}:
+                            class_calls[sub_node.expr.name] += 1
 
             if class_calls:
                 max_calls = max(class_calls.values())
@@ -1174,27 +1006,33 @@ class CodeSmellDetector:
                 # Check if external calls significantly outnumber local calls
                 if (max_calls > self.thresholds["FEATURE_ENVY_CALLS"] and
                         max_calls > local_calls * 2):  # At least twice as many external calls
-                    # Confidence: resolved when the receiver names a project-defined
-                    # class or an imported alias; unresolved otherwise (free variable
-                    # that may refer to an external object) (Direction A).
-                    resolved = (
-                        max_class in self._all_defined_names() or
-                        any(max_class in aliases
-                            for aliases in self._project_import_aliases.values())
-                    )
-                    confidence = 'resolved' if resolved else 'unresolved receiver (possible external object)'
                     self.add_smell(
                         name="Feature Envy",
-                        description=(
-                            f"Method '{node.name}' makes {max_calls} calls to "
-                            f"'{max_class}' but only {local_calls} local calls in "
-                            f"{file_path} [confidence: {confidence}]"
-                        ),
+                        description=f"Method '{node.name}' makes {max_calls} calls to '{max_class}' but only {local_calls} local calls in {file_path}",
                         file_path=file_path,
                         module_class=node.name,
                         line_number=node.lineno,
                         severity='medium'
                     )
+
+    @staticmethod
+    def _imported_names(module):
+        """Names bound by import statements anywhere in the module (modules, not objects)."""
+        names = set()
+        for node in module.nodes_of_class((nodes.Import, nodes.ImportFrom)):
+            for name, alias in node.names:
+                if isinstance(node, nodes.Import):
+                    names.add(alias or name.split('.')[0])
+                else:
+                    names.add(alias or name)
+        return names
+
+    @staticmethod
+    def _root_name(node):
+        """Name at the root of an attribute chain (a for a.b.c), or None."""
+        while isinstance(node, (nodes.Attribute, nodes.AssignAttr)):
+            node = node.expr
+        return node.name if isinstance(node, nodes.Name) else None
 
     def detect_inappropriate_intimacy(self, module, file_path):
         """
@@ -1202,7 +1040,9 @@ class CodeSmellDetector:
         """
         class_fields = defaultdict(set)
         class_methods = defaultdict(set)
+        class_accesses = defaultdict(set)  # attributes used on objects other than self
         class_relationships = defaultdict(set)  # Track inheritance and composition
+        module_names = self._module_names
 
         for node in module.nodes_of_class(nodes.ClassDef):
             # Skip data classes and utility classes
@@ -1230,9 +1070,15 @@ class CodeSmellDetector:
                 n.name for n in node.mymethods()
                 if not n.name.startswith('__')  # Skip magic methods
             }
-            class_fields[node.name] = {
-                name for name in node.instance_attrs.keys()
-                if not name.startswith('_')  # Skip private fields
+            # Intimacy is reaching into another class's private state; public
+            # attributes are its interface and their names coincide across classes
+            class_fields[node.name] = {f for f in node.instance_attrs
+                                       if f.startswith('_') and not f.startswith('__')}
+            # Attributes this class reads or writes on other objects (not self/cls, not modules)
+            class_accesses[node.name] = {
+                n.attrname for n in node.nodes_of_class((nodes.Attribute, nodes.AssignAttr))
+                if n.expr.as_string() not in {'self', 'cls'} and
+                self._root_name(n) not in module_names
             }
 
             # Track inheritance relationships
@@ -1251,12 +1097,13 @@ class CodeSmellDetector:
             self._global_class_info[key] = {
                 "fields": class_fields[class_name],
                 "methods": class_methods[class_name],
+                "accesses": class_accesses[class_name],
                 "relationships": class_relationships[class_name],
                 "class_name": class_name,
                 "file_path": file_path,
             }
 
-        for class_name, methods in class_methods.items():
+        for class_name in class_methods:
             for other_class, other_fields in class_fields.items():
                 if class_name != other_class:
                     # Skip if there's a valid relationship
@@ -1264,15 +1111,15 @@ class CodeSmellDetector:
                             class_name in class_relationships[other_class]):
                         continue
 
-                    shared = len(methods.intersection(other_fields))
-                    method_ratio = shared / len(methods) if methods else 0
+                    shared = len(class_accesses[class_name] & other_fields)
+                    field_ratio = shared / len(other_fields) if other_fields else 0
 
                     if (shared > self.thresholds["INAPPROPRIATE_INTIMACY_SHARED"] and
-                            method_ratio > 0.3):  # More than 30% of methods are shared
+                            field_ratio > 0.3):  # Uses more than 30% of the other's fields
                         self.add_smell(
                             name="Inappropriate Intimacy",
                             description=f"Class '{class_name}' might be too intimate with '{other_class}' "
-                            f"({shared} shared members, {method_ratio:.1%} of methods) in {file_path}",
+                            f"(uses {shared} of its fields, {field_ratio:.1%}) in {file_path}",
                             file_path=file_path,
                             module_class=class_name,
                             line_number=None,
@@ -1298,23 +1145,28 @@ class CodeSmellDetector:
             return all(name.startswith(('set_', 'with_', 'add_')) for name in chain)
 
         def is_common_pattern(chain):
-            """Check if the chain is a common valid pattern."""
+            """True if every link after the first object is part of one common API (paths, ORM)."""
             common_patterns = {
                 'logging': {'debug', 'info', 'warning', 'error', 'critical'},
                 'paths': {'parent', 'name', 'suffix', 'stem'},
                 'testing': {'assert_', 'expect', 'mock'},
                 'db': {'query', 'filter', 'order_by', 'limit', 'all', 'first'}
             }
-            return any(any(method in pattern for method in chain)
+            return any(all(method in pattern for method in chain[:-1])
                        for pattern in common_patterns.values())
 
+        module_names = self._module_names
         for node in module.nodes_of_class(nodes.Attribute):
+            # Measure each chain once, from its outermost attribute
+            if isinstance(node.parent, nodes.Attribute) and node.parent.expr is node:
+                continue
             chain_length, chain = get_chain_length(node)
 
-            # Skip if it's a valid pattern
+            # Skip if it's a valid pattern; a.b.c.d on an imported module is a path, not a chain
             if (chain_length <= self.thresholds["MESSAGE_CHAIN_LENGTH"] or
                 is_builder_pattern(chain) or
-                    is_common_pattern(chain)):
+                    is_common_pattern(chain) or
+                    self._root_name(node) in module_names):
                 continue
 
             # Get context for better description
@@ -1324,7 +1176,7 @@ class CodeSmellDetector:
                     context = parent.name
                     break
 
-            self.code_smells.append(CodeSmell(
+            self.add_smell(
                 name="Message Chains",
                 description=f"Long chain ({chain_length} calls: {' -> '.join(reversed(chain))}) "
                 f"in {context or 'unknown context'} at line {node.lineno} in {file_path}",
@@ -1332,7 +1184,7 @@ class CodeSmellDetector:
                 module_class=context,
                 line_number=node.lineno,
                 severity='medium'
-            ))
+            )
 
     def detect_middle_man(self, module, file_path):
         """
@@ -1377,11 +1229,12 @@ class CodeSmellDetector:
                 # Check if method is just delegating
                 if len(method.body) == 1 and isinstance(method.body[0], nodes.Return):
                     return_value = method.body[0].value
-                    if isinstance(return_value, nodes.Call):
+                    func = return_value.func if isinstance(return_value, nodes.Call) else None
+                    # Delegation forwards to another object: return <obj>.<method>(...),
+                    # not a plain function call and not a call to one of self's own methods
+                    if isinstance(func, nodes.Attribute) and func.expr.as_string() != 'self':
                         delegating_methods += 1
-                        # Track which object we're delegating to
-                        if isinstance(return_value.func, nodes.Attribute):
-                            delegate_targets[return_value.func.expr.as_string()].append(method.name)
+                        delegate_targets[func.expr.as_string()].append(method.name)
 
             delegation_ratio = delegating_methods / total_methods if total_methods > 0 else 0
             if (delegation_ratio > self.thresholds["MIDDLE_MAN_RATIO"] and
@@ -1402,25 +1255,40 @@ class CodeSmellDetector:
         Detect smells requiring cross-file context.
         Call this once after all per-file detect_smells() calls are complete.
         """
-        self._finalize_dead_code()
         self._cross_file_alternative_classes()
         self._cross_file_data_clumps()
         self._cross_file_duplicate_code()
         self._cross_file_inappropriate_intimacy()
         self._cross_file_parallel_inheritance()
+        self._cross_file_temporary_fields()
+        self._cross_file_dead_code()
+
+    def _cross_file_temporary_fields(self):
+        """Drop fields that some other file reads through an object, then findings left too small."""
+        for smell, fields in self._temp_field_findings:
+            remaining = fields - self._attr_reads
+            if len(remaining) < self.thresholds["TEMPORARY_FIELD_THRESHOLD"]:
+                self.code_smells.remove(smell)
+            elif remaining != fields:
+                smell.description = self._temporary_field_description(
+                    remaining, smell.module_class, smell.line_number, smell.file_path)
+        self._temp_field_findings = []
 
     def _cross_file_alternative_classes(self):
         for methods, entries in self._global_class_methods.items():
             if len(methods) < 2:
                 continue
-            files_seen = {fp for _, fp in entries}
+            files_seen = sorted({fp for _, fp in entries})
             if len(files_seen) < 2:
                 continue
+            if self._share_base(self._global_class_bases[e] for e in entries):
+                continue
             if len(entries) >= self.thresholds["ALTERNATIVE_CLASSES_THRESHOLD"]:
+                self._drop_file_findings("Alternative Classes", methods, files_seen)
                 class_list = [f"{cls} ({fp})" for cls, fp in entries]
                 self.add_smell(
                     name="Alternative Classes with Different Interfaces",
-                    description=f"Classes {', '.join(class_list)} share similar methods {', '.join(methods)} across files",
+                    description=f"Classes {', '.join(class_list)} share similar methods {', '.join(sorted(methods))} across files",
                     file_path=", ".join(files_seen),
                     module_class=", ".join(cls for cls, _ in entries),
                     line_number=None,
@@ -1428,29 +1296,36 @@ class CodeSmellDetector:
                 )
 
     def _cross_file_data_clumps(self):
-        for params, entries in self._global_param_groups.items():
-            if len(params) < self.thresholds["DATA_CLUMPS_THRESHOLD"]:
-                continue
-            files_seen = {fp for _, fp in entries}
+        entries = self._global_param_funcs
+        for params, members in self._maximal_param_groups([p for _, _, p in entries]).items():
+            files_seen = sorted({entries[i][1] for i in members})
             if len(files_seen) < 2:
                 continue
-            if len(entries) > 1:
-                func_list = [f"{fn} ({fp})" for fn, fp in entries]
-                self.add_smell(
-                    name="Data Clumps",
-                    description=f"Parameters {', '.join(params)} appear together across files in: {', '.join(func_list)}",
-                    file_path=", ".join(files_seen),
-                    module_class=", ".join(fn for fn, _ in entries),
-                    line_number=None,
-                    severity='medium'
-                )
+            self._drop_file_findings("Data Clumps", params, files_seen)
+            func_list = [f"{entries[i][0]} ({entries[i][1]})" for i in members]
+            self.add_smell(
+                name="Data Clumps",
+                description=f"Parameters {', '.join(sorted(params))} appear together across files in: {', '.join(func_list)}",
+                file_path=", ".join(files_seen),
+                module_class=", ".join(entries[i][0] for i in members),
+                line_number=None,
+                severity='medium'
+            )
+
+    def _drop_file_findings(self, name, key, files):
+        """Remove per-file findings superseded by a cross-file finding for the same group."""
+        for fp in files:
+            smell = self._file_findings.pop((name, key, fp), None)
+            if smell is not None:
+                self.code_smells.remove(smell)
 
     def _cross_file_duplicate_code(self):
         for normalized_code, entries in self._global_code_blocks.items():
-            files_seen = {fp for _, fp, _ in entries}
+            files_seen = sorted({fp for _, fp, _ in entries})
             if len(files_seen) < 2:
                 continue
             if len(entries) >= self.thresholds["DUPLICATE_CODE_THRESHOLD"]:
+                self._drop_file_findings("Duplicate Code", normalized_code, files_seen)
                 total_lines = sum(nl for _, _, nl in entries)
                 func_list = [f"{fn} ({fp})" for fn, fp, _ in entries]
                 self.add_smell(
@@ -1464,29 +1339,28 @@ class CodeSmellDetector:
 
     def _cross_file_inappropriate_intimacy(self):
         entries = list(self._global_class_info.values())
-        for i, a in enumerate(entries):
-            for b in entries[i + 1:]:
-                if a["file_path"] == b["file_path"]:
-                    continue
-                if (b["class_name"] in a["relationships"] or
-                        a["class_name"] in b["relationships"]):
-                    continue
-                shared = len(a["methods"].intersection(b["fields"]))
-                method_ratio = shared / len(a["methods"]) if a["methods"] else 0
-                if (shared > self.thresholds["INAPPROPRIATE_INTIMACY_SHARED"] and
-                        method_ratio > 0.3):
-                    self.add_smell(
-                        name="Inappropriate Intimacy",
-                        description=(
-                            f"Class '{a['class_name']}' ({a['file_path']}) might be too intimate "
-                            f"with '{b['class_name']}' ({b['file_path']}) "
-                            f"({shared} shared members, {method_ratio:.1%} of methods)"
-                        ),
-                        file_path=a["file_path"],
-                        module_class=a["class_name"],
-                        line_number=None,
-                        severity='medium'
-                    )
+        for a, b in permutations(entries, 2):
+            if a["file_path"] == b["file_path"]:
+                continue
+            if (b["class_name"] in a["relationships"] or
+                    a["class_name"] in b["relationships"]):
+                continue
+            shared = len(a["accesses"] & b["fields"])
+            field_ratio = shared / len(b["fields"]) if b["fields"] else 0
+            if (shared > self.thresholds["INAPPROPRIATE_INTIMACY_SHARED"] and
+                    field_ratio > 0.3):
+                self.add_smell(
+                    name="Inappropriate Intimacy",
+                    description=(
+                        f"Class '{a['class_name']}' ({a['file_path']}) might be too intimate "
+                        f"with '{b['class_name']}' ({b['file_path']}) "
+                        f"(uses {shared} of its fields, {field_ratio:.1%})"
+                    ),
+                    file_path=a["file_path"],
+                    module_class=a["class_name"],
+                    line_number=None,
+                    severity='medium'
+                )
 
     def _cross_file_parallel_inheritance(self):
         class_info = {}
@@ -1510,8 +1384,7 @@ class CodeSmellDetector:
             if len(all_files) < 2:
                 continue
             if len(h1) > 1 and len(h2) > 1:
-                if any(c1.replace(h1[0], '') == c2.replace(h2[0], '')
-                       for c1, c2 in product(h1, h2)):
+                if self._names_correspond(b1, h1, b2, h2):
                     if h1[0] in class_info and h2[0] in class_info:
                         union_size = len(class_info[h1[0]] | class_info[h2[0]])
                         if union_size > 0:
@@ -1523,7 +1396,7 @@ class CodeSmellDetector:
                                         f"Parallel cross-file hierarchies: "
                                         f"{' -> '.join(h1)} and {' -> '.join(h2)}"
                                     ),
-                                    file_path=", ".join(all_files),
+                                    file_path=", ".join(sorted(all_files)),
                                     module_class=None,
                                     line_number=None,
                                     severity='high'
@@ -1542,333 +1415,34 @@ class CodeSmellDetector:
             for smell in self.code_smells:
                 print(f"- {smell.name}: {smell.description}")
 
-    # ------------------------------------------------------------------
-    # Magic literals and constant conditions
-    # ------------------------------------------------------------------
-
-    # Numbers that are meaningful by themselves and therefore not "magic".
-    MAGIC_ALLOWED_NUMBERS = frozenset({-1, 0, 1, 2})
-
-    # Language-protocol names that look like literals but are part of the
-    # Python object model rather than domain vocabulary.
-    MAGIC_STRING_IGNORED = frozenset({
-        'self', 'cls', '__init__', '__main__', '__all__', '__name__',
-    })
-
-    # Comparison operators usable to evaluate a literal-only condition.
-    _CONDITION_OPERATORS = {
-        '==': operator.eq,
-        '!=': operator.ne,
-        '<': operator.lt,
-        '<=': operator.le,
-        '>': operator.gt,
-        '>=': operator.ge,
-        'in': lambda left, right: left in right,
-        'not in': lambda left, right: left not in right,
-        'is': operator.is_,
-        'is not': operator.is_not,
-    }
+    @staticmethod
+    def _decorator_names(node):
+        """Last dotted part of each decorator: @property, @x.setter, @dataclass(frozen=True)."""
+        names = set()
+        for decorator in node.decorators.nodes if node.decorators else ():
+            target = decorator.func if isinstance(decorator, nodes.Call) else decorator
+            names.add(target.as_string().split('.')[-1])
+        return names
 
     @staticmethod
-    def _is_function_node(node):
-        return isinstance(node, (nodes.FunctionDef, nodes.AsyncFunctionDef))
-
-    def _iter_scope_functions(self, module):
-        """
-        Yield module-level functions and methods, but not functions nested
-        inside other functions (those are not independently addressable).
-        """
-        for node in module.body:
-            if self._is_function_node(node):
-                yield node
-            elif isinstance(node, nodes.ClassDef):
-                for child in node.body:
-                    if self._is_function_node(child):
-                        yield child
-
-    def _walk_own_scope(self, function):
-        """
-        Yield nodes inside a function body, stopping at nested scopes so that
-        nested functions are not attributed to the enclosing function twice.
-        """
-        stack = list(function.body)
-        while stack:
-            node = stack.pop()
-            yield node
-            if self._is_function_node(node) or isinstance(node, (nodes.Lambda, nodes.ClassDef)):
-                continue
-            stack.extend(node.get_children())
-
-    def _named_constant_values(self, module):
-        """Collect values bound to module-level UPPER_CASE constants."""
-        values = set()
-        for node in module.body:
-            if isinstance(node, nodes.Assign) and isinstance(node.value, nodes.Const):
-                for target in node.targets:
-                    name = getattr(target, 'name', None)
-                    if isinstance(name, str) and name.isupper():
-                        values.add(node.value.value)
-        return values
+    def _is_exception_class(node):
+        return node.name.endswith(('Error', 'Exception', 'Warning')) or any(
+            base.as_string().split('.')[-1].endswith(('Error', 'Exception', 'Warning'))
+            for base in node.bases)
 
     @staticmethod
-    def _is_docstring(node):
-        """A bare string statement is documentation, not a magic literal."""
-        parent = node.parent
-        if not isinstance(parent, nodes.Expr):
-            return False
-        scope = parent.parent
-        body = getattr(scope, 'body', None)
-        return bool(body) and body[0] is parent
-
-    @staticmethod
-    def _string_literals(node):
-        """Return string Const nodes directly held by an operand."""
-        if isinstance(node, nodes.Const) and isinstance(node.value, str):
-            return [node]
-        if isinstance(node, (nodes.Tuple, nodes.List, nodes.Set)):
-            return [elt for elt in node.elts
-                    if isinstance(elt, nodes.Const) and isinstance(elt.value, str)]
-        return []
-
-    @staticmethod
-    def _is_magic_string(value):
-        """Filter trivial or protocol strings out of Magic String candidates."""
-        stripped = value.strip()
-        if len(stripped) < 2:
-            return False
-        return stripped not in CodeSmellDetector.MAGIC_STRING_IGNORED
-
-    def _source_line(self, lineno):
-        content = getattr(self, 'file_content', [])
-        if 1 <= lineno <= len(content):
-            return content[lineno - 1].strip()[:80]
-        return ""
-
-    def detect_magic_numbers(self, module, file_path):
-        """
-        Detect functions that hard-code numeric literals instead of naming them.
-
-        Literals in {-1, 0, 1, 2} and values bound to module-level UPPER_CASE
-        constants are not reported, so the detector targets unexplained
-        domain values rather than ordinary arithmetic.
-        """
-        threshold = self.thresholds.get('MAGIC_NUMBER_THRESHOLD', 2)
-        named_values = self._named_constant_values(module)
-
-        for function in self._iter_scope_functions(module):
-            hits = defaultdict(list)
-
-            for node in self._walk_own_scope(function):
-                if not isinstance(node, nodes.Const):
-                    continue
-                value = node.value
-                # bool is a subclass of int; True/False are not magic numbers
-                if isinstance(value, bool) or not isinstance(value, (int, float)):
-                    continue
-                if value in self.MAGIC_ALLOWED_NUMBERS or value in named_values:
-                    continue
-                hits[value].append(node.lineno)
-
-            if len(hits) < threshold:
-                continue
-
-            listing = ", ".join(
-                f"{value} (line {min(lines)})" for value, lines in sorted(hits.items())
-            )
-            severity = 'High' if len(hits) >= threshold * 2 else 'Medium'
-            self.add_smell(
-                "Magic Number",
-                f"Function '{function.name}' uses {len(hits)} distinct magic numbers: {listing}",
-                file_path,
-                function.name,
-                min(min(lines) for lines in hits.values()),
-                severity=severity
-            )
-
-    def detect_magic_strings(self, module, file_path):
-        """
-        Detect string literals used in comparisons or repeated within a function.
-
-        A single literal comparison is tolerated until MAGIC_STRING_THRESHOLD
-        distinct literals accumulate, which keeps the signal focused on
-        functions encoding domain vocabularies as inline strings.
-        """
-        threshold = self.thresholds.get('MAGIC_STRING_THRESHOLD', 2)
-        repeat_threshold = self.thresholds.get('MAGIC_STRING_OCCURRENCES', 2)
-
-        for function in self._iter_scope_functions(module):
-            counts = defaultdict(list)
-            compared = {}
-
-            for node in self._walk_own_scope(function):
-                if isinstance(node, nodes.Compare):
-                    # `is` comparisons are identity checks, not vocabulary
-                    operands = [node.left] + [
-                        operand for op_name, operand in node.ops
-                        if op_name not in ('is', 'is not')
-                    ]
-                    for operand in operands:
-                        for const in self._string_literals(operand):
-                            if self._is_magic_string(const.value):
-                                compared.setdefault(const.value, const.lineno)
-                elif isinstance(node, nodes.Const) and isinstance(node.value, str):
-                    if self._is_docstring(node) or isinstance(node.parent, nodes.JoinedStr):
-                        continue
-                    # Strings used as subscript keys are internal dict keys,
-                    # not a domain vocabulary worth naming.
-                    if isinstance(node.parent, nodes.Subscript):
-                        continue
-                    if self._is_magic_string(node.value):
-                        counts[node.value.strip()].append(node.lineno)
-
-            flagged = {value: lineno for value, lineno in compared.items() if value.strip()}
-            for value, lines in counts.items():
-                if len(lines) >= repeat_threshold:
-                    flagged.setdefault(value, lines[0])
-
-            if len(flagged) < threshold:
-                continue
-
-            listing = ", ".join(
-                f"'{value}' (line {lineno})"
-                for value, lineno in sorted(flagged.items(), key=lambda item: item[1])
-            )
-            self.add_smell(
-                "Magic String",
-                f"Function '{function.name}' has {len(flagged)} magic strings "
-                f"in comparisons or repeated literals: {listing}",
-                file_path,
-                function.name,
-                min(flagged.values()),
-                severity='Medium'
-            )
-
-    def _collect_constant_vars(self, function):
-        """
-        Find local variables assigned exactly one literal value and never
-        reassigned, so a later condition on them is a constant condition.
-        """
-        assigned = defaultdict(list)
-        mutated = set()
-
-        for node in self._walk_own_scope(function):
-            if isinstance(node, nodes.Assign):
-                value_node = node.value if isinstance(node.value, nodes.Const) else None
-                for target in node.targets:
-                    if isinstance(target, nodes.AssignName):
-                        assigned[target.name].append((value_node, node.lineno))
-            elif isinstance(node, nodes.AnnAssign) and node.value is not None:
-                if isinstance(node.target, nodes.AssignName):
-                    value_node = node.value if isinstance(node.value, nodes.Const) else None
-                    assigned[node.target.name].append((value_node, node.lineno))
-            elif isinstance(node, nodes.AugAssign):
-                if isinstance(node.target, nodes.AssignName):
-                    mutated.add(node.target.name)
-            elif isinstance(node, (nodes.For, nodes.AsyncFor)):
-                targets = []
-                if isinstance(node.target, nodes.AssignName):
-                    targets = [node.target]
-                elif isinstance(node.target, nodes.Tuple):
-                    targets = [elt for elt in node.target.elts
-                               if isinstance(elt, nodes.AssignName)]
-                mutated.update(target.name for target in targets)
-
-        const_vars = {}
-        for name, records in assigned.items():
-            if name in mutated or len(records) != 1:
-                continue
-            value_node, lineno = records[0]
-            if value_node is None:
-                continue
-            const_vars[name] = (value_node.value, lineno)
-        return const_vars
-
-    @staticmethod
-    def _resolve_literal(node, const_vars):
-        """
-        Resolve an operand to a literal value.
-
-        Returns:
-            tuple or None: (value, human readable origin) when resolvable.
-        """
-        if isinstance(node, nodes.Const):
-            return node.value, None
-        if isinstance(node, nodes.Name) and node.name in const_vars:
-            value, lineno = const_vars[node.name]
-            return value, f"'{node.name}' is assigned the literal {value!r} at line {lineno}"
-        return None
-
-    def _constant_test(self, test, const_vars):
-        """
-        Decide whether a condition is decidable at analysis time.
-
-        Returns:
-            tuple or None: (always_true, reason) when decidable.
-        """
-        if isinstance(test, nodes.Const):
-            return bool(test.value), "the condition is a literal"
-
-        if isinstance(test, nodes.Name) and test.name in const_vars:
-            value, lineno = const_vars[test.name]
-            return bool(value), f"'{test.name}' is assigned the literal {value!r} at line {lineno}"
-
-        if isinstance(test, nodes.Compare) and len(test.ops) == 1:
-            op_name, right_node = test.ops[0]
-            left = self._resolve_literal(test.left, const_vars)
-            right = self._resolve_literal(right_node, const_vars)
-            if left is None or right is None:
-                return None
-            compare = self._CONDITION_OPERATORS.get(op_name)
-            if compare is None:
-                return None
-            try:
-                result = bool(compare(left[0], right[0]))
-            except (TypeError, ValueError):
-                return None
-            reasons = [reason for reason in (left[1], right[1]) if reason]
-            return result, "; ".join(reasons) or "both operands are literals"
-
-        return None
-
-    def detect_constant_conditions(self, module, file_path):
-        """
-        Detect if/while conditions that can never change branch: literal
-        conditions, literal-only comparisons, and comparisons against a
-        variable that is assigned one literal value.
-        """
-        for function in self._iter_scope_functions(module):
-            const_vars = self._collect_constant_vars(function)
-
-            for node in self._walk_own_scope(function):
-                if not isinstance(node, (nodes.If, nodes.While)):
-                    continue
-                # `while True:` is an intentional loop idiom, not a bug
-                if (isinstance(node, nodes.While) and isinstance(node.test, nodes.Const)
-                        and bool(node.test.value)):
-                    continue
-
-                verdict = self._constant_test(node.test, const_vars)
-                if verdict is None:
-                    continue
-
-                always_true, reason = verdict
-                snippet = self._source_line(node.lineno)
-                description = (
-                    f"Condition at line {node.lineno} always evaluates to {always_true} "
-                    f"({reason})"
-                )
-                if snippet:
-                    description += f": {snippet}"
-
-                self.add_smell(
-                    "Constant Condition",
-                    description,
-                    file_path,
-                    function.name,
-                    node.lineno,
-                    # an always-false guard hides dead code, so raise it
-                    severity='High' if not always_true else 'Medium'
-                )
+    def _parameters(node):
+        """All named parameters (positional-only, regular, keyword-only) without self / cls."""
+        args = node.args
+        params = list(args.posonlyargs or []) + list(args.args or []) + list(args.kwonlyargs or [])
+        annotations = (list(args.posonlyargs_annotations or []) + list(args.annotations or []) +
+                       list(args.kwonlyargs_annotations or []))
+        annotations += [None] * (len(params) - len(annotations))
+        pairs = list(zip(params, annotations))
+        if (pairs and pairs[0][0].name in ('self', 'cls') and
+                isinstance(node.parent, nodes.ClassDef)):
+            pairs = pairs[1:]
+        return pairs
 
     def add_smell(self, name, description, file_path, module_class,
                   line_number=None, severity='medium'):
@@ -1883,11 +1457,13 @@ class CodeSmellDetector:
             line_number (int, optional): The line number where the smell was detected
             severity (str, optional): The severity level of the smell (default: 'medium')
         """
-        self.code_smells.append(CodeSmell(
+        smell = CodeSmell(
             name=name,
             description=description,
             file_path=file_path,
             module_class=module_class,
             line_number=line_number,
             severity=severity
-        ))
+        )
+        self.code_smells.append(smell)
+        return smell
