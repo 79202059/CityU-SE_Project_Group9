@@ -37,6 +37,7 @@ from .baseline import (
     load_baseline,
     write_baseline,
 )
+from .cache import DEFAULT_CACHE_DIRNAME, AnalysisCache, tree_manifest
 from .code_smell_detector import CodeSmellDetector
 from .config_handler import ConfigHandler
 from .exceptions import CodeAnalysisError
@@ -208,6 +209,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="Rows per table in --format markdown (default: %d)" % DEFAULT_MARKDOWN_LIMIT,
     )
     parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="Disable the content-addressed analysis cache (always re-analyze the tree)",
+    )
+    parser.add_argument(
+        "--cache-dir",
+        default=None,
+        metavar="DIR",
+        help="Cache directory (default: %s under the repository root)"
+        % DEFAULT_CACHE_DIRNAME,
+    )
+    parser.add_argument(
         "--version",
         action="version",
         version="%(prog)s " + _version(),
@@ -221,6 +234,7 @@ def analyze_tree(
     ignore_dirs: Optional[List[str]] = None,
     *,
     context: Optional[dict] = None,
+    cache: Optional[AnalysisCache] = None,
 ) -> List[Finding]:
     """Run all three detectors against one checkout and return Findings.
 
@@ -230,8 +244,38 @@ def analyze_tree(
     When ``context`` is a dict, project-level signals used by risk ranking are
     recorded into it (``fan_in`` from the structural dependency graph).  The
     parameter is optional so existing callers keep their exact behaviour.
+
+    When ``cache`` is provided, the tree is first looked up by its content
+    manifest (see :mod:`code_quality_analyzer.cache`).  A hit returns the
+    stored findings re-rooted onto ``tree_path`` without running any detector;
+    a miss runs the detectors and stores the result.  Results are identical
+    either way - the cache is a memo of a pure function of tree content.
     """
     ignore = DEFAULT_IGNORE_DIRS | set(ignore_dirs or [])
+    if cache is None:
+        return _analyze_tree_uncached(tree_path, config_handler, ignore, context)
+
+    _manifest, manifest_digest = tree_manifest(tree_path, ignore)
+    key = cache.key_for(config_handler, manifest_digest, _version())
+    hit = cache.load(key, tree_path)
+    if hit is not None:
+        findings, fan_in = hit
+        if context is not None:
+            context["fan_in"] = fan_in
+        return findings
+
+    findings = _analyze_tree_uncached(tree_path, config_handler, ignore, context)
+    cache.store(key, findings, (context or {}).get("fan_in") or {}, tree_path)
+    return findings
+
+
+def _analyze_tree_uncached(
+    tree_path: str,
+    config_handler: ConfigHandler,
+    ignore: set,
+    context: Optional[dict],
+) -> List[Finding]:
+    """Detector pass without cache lookup; returns enriched findings."""
     findings: List[Finding] = []
 
     code_detector = CodeSmellDetector(config_handler.get_thresholds("code_smells"))
@@ -663,6 +707,11 @@ def run(args: argparse.Namespace) -> int:
     config_handler = ConfigHandler(config_path)
     tool_version = _version()
 
+    cache: Optional[AnalysisCache] = None
+    if not args.no_cache:
+        cache_dir = args.cache_dir or os.path.join(repo_root, DEFAULT_CACHE_DIRNAME)
+        cache = AnalysisCache(cache_dir)
+
     baseline_path = _resolve_baseline_path(args, project)
     baseline_doc = None
     if args.baseline_mode == "diff":
@@ -697,7 +746,7 @@ def run(args: argparse.Namespace) -> int:
             head_tree = provider.materialize(args.head)
             logger.info("Analyzing head revision %s ...", args.head)
             head_findings = analyze_tree(
-                head_tree, config_handler, args.ignore, context=context
+                head_tree, config_handler, args.ignore, context=context, cache=cache
             )
             if args.baseline_mode == "write":
                 payload = baseline_payload(
@@ -726,7 +775,7 @@ def run(args: argparse.Namespace) -> int:
                 )
             else:
                 base_tree = provider.materialize(args.base)
-                base_findings = analyze_tree(base_tree, config_handler, args.ignore)
+                base_findings = analyze_tree(base_tree, config_handler, args.ignore, cache=cache)
                 classified = classify_lifecycle(
                     base_findings,
                     head_findings,
@@ -741,10 +790,10 @@ def run(args: argparse.Namespace) -> int:
             base_tree = provider.materialize(args.base)
             head_tree = provider.materialize(args.head)
             logger.info("Analyzing base revision %s ...", args.base)
-            base_findings = analyze_tree(base_tree, config_handler, args.ignore)
+            base_findings = analyze_tree(base_tree, config_handler, args.ignore, cache=cache)
             logger.info("Analyzing head revision %s ...", args.head)
             head_findings = analyze_tree(
-                head_tree, config_handler, args.ignore, context=context
+                head_tree, config_handler, args.ignore, context=context, cache=cache
             )
             classified = classify_lifecycle(
                 base_findings,

@@ -75,3 +75,5 @@ _pytest_tmp/
 # .pyexamine-baseline.json is deliberately NOT ignored: the baseline belongs
 # in the repository, otherwise every PR diffs against nothing.
 delta-summary.md
+# content-addressed analysis cache (a pure memo; safe to delete and rebuild)
+.pyexamine-cache/

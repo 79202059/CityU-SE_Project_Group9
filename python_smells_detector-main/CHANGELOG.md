@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+### Performance (NFR)
+
+- Added a content-addressed incremental analysis cache (`cache.py`). A tree is
+  identified by the sorted `(relative path, sha256)` manifest of its Python
+  files, plus a digest of the effective thresholds and the tool version, so
+  repeated gate runs on unchanged sources (and the shared base snapshot across
+  pull requests) skip the detectors entirely. Findings are stored relative to
+  the tree root and re-rooted on load. Controlled by `--no-cache` and
+  `--cache-dir` (default `.pyexamine-cache/` under the repository root, ignored
+  by git). See `docs/adr/ADR-008-performance-incremental-cache.md`.
+
 ## 0.3.0
 
 Merges `fix/detector-precision` and follows it with a full review of the detectors.
