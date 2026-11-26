@@ -13,7 +13,10 @@ Protocol (fixed, so numbers are comparable across machines):
    whole-tree memo misses. This is the honest cost of an actual pull-request
    diff under the current design (per-file incrementality is future work).
 
-The NFR: warm <= 40 % of full, or <= 30 s in absolute terms.
+The NFR: an incremental (pull-request) analysis <= 40 % of a full run, or
+<= 30 s in absolute terms. The `changed` phase models that case. The `warm`
+phase answers a different question (a repeated gate run on unchanged
+sources) and is reported for information only.
 """
 
 from __future__ import annotations
@@ -31,8 +34,8 @@ from code_quality_analyzer.cache import AnalysisCache
 from code_quality_analyzer.config_handler import ConfigHandler
 from code_quality_analyzer.delta import analyze_tree
 
-WARM_RATIO_TARGET = 0.40
-WARM_SECONDS_TARGET = 30.0
+RATIO_TARGET = 0.40
+SECONDS_TARGET = 30.0
 
 
 def _timed(call):
@@ -94,9 +97,12 @@ def run(root: str, config_path: str) -> dict:
             % (len(full_findings), len(warm_findings))
         )
 
+    changed_ratio = changed_seconds / full_seconds if full_seconds else 0.0
     warm_ratio = warm_seconds / full_seconds if full_seconds else 0.0
+    relative_ok = changed_ratio <= RATIO_TARGET
+    absolute_ok = changed_seconds <= SECONDS_TARGET
     return {
-        "project": os.path.abspath(root),
+        "project": os.path.basename(os.path.abspath(root)),
         "files": files,
         "lines": lines,
         "findings": len(full_findings),
@@ -106,11 +112,28 @@ def run(root: str, config_path: str) -> dict:
             "warm": round(warm_seconds, 2),
             "changed": round(changed_seconds, 2),
         },
-        "warm_ratio": round(warm_ratio, 4),
+        "ratios": {
+            "changed_over_full": round(changed_ratio, 4),
+            "warm_over_full": round(warm_ratio, 4),
+        },
         "nfr": {
-            "warm_ratio_target": WARM_RATIO_TARGET,
-            "warm_seconds_target": WARM_SECONDS_TARGET,
-            "passes": warm_ratio <= WARM_RATIO_TARGET or warm_seconds <= WARM_SECONDS_TARGET,
+            "requirement": "incremental analysis <= 40 % of a full run, or <= 30 s",
+            "relative": {
+                "observed": round(changed_ratio, 4),
+                "target": RATIO_TARGET,
+                "passes": relative_ok,
+            },
+            "absolute": {
+                "observed_seconds": round(changed_seconds, 2),
+                "target": SECONDS_TARGET,
+                "passes": absolute_ok,
+            },
+            "warm_repeat_run": {
+                "observed_seconds": round(warm_seconds, 2),
+                "observed_over_full": round(warm_ratio, 4),
+                "note": "a repeated run on unchanged sources, not the requirement",
+            },
+            "passes": relative_ok or absolute_ok,
         },
         "machine": {
             "platform": platform.platform(),
@@ -122,29 +145,44 @@ def run(root: str, config_path: str) -> dict:
 
 
 def render(result: dict) -> str:
-    warm = result["nfr"]["passes"]
+    seconds = result["seconds"]
+    nfr = result["nfr"]
+    relative = nfr["relative"]
+    absolute = nfr["absolute"]
+    if relative["passes"]:
+        verdict = "PASS via the relative clause"
+    elif absolute["passes"]:
+        verdict = "PASS via the absolute clause"
+    else:
+        verdict = "FAIL under both clauses"
     return "\n".join(
         [
             "## 100k-line performance measurement",
             "",
             "| phase | seconds | note |",
             "| --- | ---: | --- |",
-            "| full (no cache) | %(full).2f | detector cost, the NFR denominator |"
-            % result["seconds"],
-            "| cold (cache write) | %(cold_with_cache_write).2f | first run of a new tree |"
-            % result["seconds"],
-            "| warm (cache hit) | %(warm).2f | repeated gate run on unchanged sources |"
-            % result["seconds"],
-            "| changed (memo miss) | %(changed).2f | one PR line: whole-tree re-analysis |"
-            % result["seconds"],
+            "| full (no cache) | %(full).2f | detector cost, the NFR denominator |" % seconds,
+            "| cold (cache write) | %(cold_with_cache_write).2f | first run of a new tree |" % seconds,
+            "| warm (cache hit) | %(warm).2f | repeated run on unchanged sources, not the NFR |" % seconds,
+            "| changed (memo miss) | %(changed).2f | one PR line: whole-tree re-analysis, the NFR case |" % seconds,
             "",
             "- project: %d files, %d lines, %d findings"
             % (result["files"], result["lines"], result["findings"]),
-            "- warm / full = %.1f %% (target <= %.0f %%)"
-            % (result["warm_ratio"] * 100, result["nfr"]["warm_ratio_target"] * 100),
-            "- warm absolute = %.2f s (target <= %.0f s)"
-            % (result["seconds"]["warm"], result["nfr"]["warm_seconds_target"]),
-            "- NFR verdict: **%s**" % ("PASS" if warm else "FAIL"),
+            "- NFR relative clause: changed / full = %.1f %% (target <= %.0f %%) -> %s"
+            % (
+                relative["observed"] * 100,
+                relative["target"] * 100,
+                "PASS" if relative["passes"] else "FAIL",
+            ),
+            "- NFR absolute clause: changed = %.2f s (target <= %.0f s) -> %s"
+            % (
+                absolute["observed_seconds"],
+                absolute["target"],
+                "PASS" if absolute["passes"] else "FAIL",
+            ),
+            "- warm / full = %.1f %% (informational: a repeated run, not an incremental one)"
+            % (nfr["warm_repeat_run"]["observed_over_full"] * 100),
+            "- NFR verdict: **%s**" % verdict,
             "",
         ]
     )

@@ -1,24 +1,41 @@
 {
-  "project": "C:\\Users\\86159\\AppData\\Local\\Temp\\pe-bench-100k",
+  "project": "bench100k",
   "files": 522,
-  "lines": 100077,
+  "lines": 100078,
   "findings": 1537,
   "seconds": {
-    "full": 25.06,
-    "cold_with_cache_write": 22.55,
-    "warm": 0.36,
-    "changed": 28.99
+    "full": 12.56,
+    "cold_with_cache_write": 13.49,
+    "warm": 0.07,
+    "changed": 14.16
   },
-  "warm_ratio": 0.0142,
+  "ratios": {
+    "changed_over_full": 1.1272,
+    "warm_over_full": 0.0058
+  },
   "nfr": {
-    "warm_ratio_target": 0.4,
-    "warm_seconds_target": 30.0,
+    "requirement": "incremental analysis <= 40 % of a full run, or <= 30 s",
+    "relative": {
+      "observed": 1.1272,
+      "target": 0.4,
+      "passes": false
+    },
+    "absolute": {
+      "observed_seconds": 14.16,
+      "target": 30.0,
+      "passes": true
+    },
+    "warm_repeat_run": {
+      "observed_seconds": 0.07,
+      "observed_over_full": 0.0058,
+      "note": "a repeated run on unchanged sources, not the requirement"
+    },
     "passes": true
   },
   "machine": {
-    "platform": "Windows-10-10.0.26300-SP0",
-    "python": "3.11.4",
-    "cpus": 16,
-    "processor": "AMD64 Family 23 Model 104 Stepping 1, AuthenticAMD"
+    "platform": "Windows-11-10.0.26200-SP0",
+    "python": "3.14.7",
+    "cpus": 32,
+    "processor": "AMD64 Family 26 Model 68 Stepping 0, AuthenticAMD"
   }
 }

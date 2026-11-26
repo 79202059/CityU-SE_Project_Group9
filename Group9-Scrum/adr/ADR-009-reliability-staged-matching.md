@@ -4,8 +4,8 @@
 - **Date:** 2026-11-06
 - **NFR:** Reliability — new-smell F1 ≥ 0.85 on the frozen dataset; no false `NEW` after cosmetic
   edits, renames or moves.
-- **Related:** `fingerprint.py`, `fuzzy.py`, `metrics.py`, `tests/test_fingerprint.py`,
-  `tests/test_fuzzy.py`, `EVALUATION_CONTRACT.md`
+- **Related:** `fingerprint.py`, `fuzzy.py`, `structure.py`, `metrics.py`, `tests/test_fuzzy.py`,
+  `tests/test_structure.py`, `EVALUATION_CONTRACT.md`
 
 ## Context
 
