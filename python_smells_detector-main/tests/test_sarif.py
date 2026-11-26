@@ -7,6 +7,7 @@ the filesystem.
 """
 
 import json
+import os
 
 import pytest
 
@@ -33,15 +34,27 @@ from code_quality_analyzer.sarif_builder import (
     sarif_level,
 )
 
-ROOT = "D:/work/proj"
+# These paths must be absolute on the host that runs the tests. "D:/work/proj"
+# is absolute only on Windows, so on a Linux runner nothing would be relativised
+# and the assertions below would compare an absolute uri with a relative one.
+_WINDOWS_ROOT = "D:/work/proj"
+_POSIX_ROOT = "/home/ci/proj"
+
+ROOT = _WINDOWS_ROOT if os.name == "nt" else _POSIX_ROOT
+ALT_ROOT = "D:/ci/proj" if os.name == "nt" else "/tmp/ci/proj"
 
 
-def _finding(name="Long Method", category=CATEGORY_CODE, path="D:/work/proj/pkg/mod.py",
+def _p(*parts, root=None):
+    """Absolute path in the host style, under the analysed root by default."""
+    return os.path.join(root if root is not None else ROOT, *parts)
+
+
+def _finding(name="Long Method", category=CATEGORY_CODE, path=None,
              symbol="pkg.mod.f", line=12, severity="high", description="method too long"):
     return Finding(
         category=category,
         smell_type=name,
-        file_path=path,
+        file_path=_p("pkg", "mod.py") if path is None else path,
         symbol=symbol,
         line=line,
         severity=severity,
@@ -74,7 +87,7 @@ class TestRuleRegistry:
 
 class TestRelativeUri:
     def test_relativises_inside_root(self):
-        assert relative_uri("D:\\work\\proj\\pkg\\mod.py", ROOT) == "pkg/mod.py"
+        assert relative_uri(_p("pkg", "mod.py"), ROOT) == "pkg/mod.py"
 
     def test_root_relative_path_is_idempotent(self):
         assert relative_uri("pkg/mod.py", ROOT) == "pkg/mod.py"
@@ -85,8 +98,9 @@ class TestRelativeUri:
         assert "\\" not in uri
 
     def test_sibling_prefix_is_not_mistaken_for_a_child(self):
-        # D:/work/proj2 must not be relativised against D:/work/proj
-        uri = relative_uri("D:/work/proj2/mod.py", ROOT)
+        # a sibling directory must not be relativised against the root
+        sibling = ROOT + "2"
+        uri = relative_uri(os.path.join(sibling, "mod.py"), ROOT)
         assert uri.endswith("proj2/mod.py")
 
 
@@ -103,9 +117,9 @@ class TestFingerprint:
         assert fingerprint(_finding(symbol="pkg.mod.f"), ROOT) != fingerprint(_finding(symbol="pkg.mod.g"), ROOT)
 
     def test_root_prefix_does_not_leak_into_the_identity(self):
-        a = _finding(path="D:/work/proj/pkg/mod.py")
-        b = _finding(path="/home/ci/proj/pkg/mod.py")
-        assert fingerprint(a, ROOT) == fingerprint(b, "/home/ci/proj")
+        a = _finding(path=_p("pkg", "mod.py"))
+        b = _finding(path=_p("pkg", "mod.py", root=ALT_ROOT))
+        assert fingerprint(a, ROOT) == fingerprint(b, ALT_ROOT)
 
     def test_two_smells_in_one_file_are_distinct(self):
         assert fingerprint(_finding(name="Long Method"), ROOT) != fingerprint(
@@ -177,9 +191,9 @@ class TestBuildSarif:
 
     def test_results_are_sorted_deterministically(self):
         findings = [
-            _finding(name="Large Class", path="D:/work/proj/b.py", line=5, symbol="b.B"),
-            _finding(name="Long Method", path="D:/work/proj/a.py", line=9, symbol="a.f"),
-            _finding(name="Long Method", path="D:/work/proj/a.py", line=2, symbol="a.g"),
+            _finding(name="Large Class", path=_p("b.py"), line=5, symbol="b.B"),
+            _finding(name="Long Method", path=_p("a.py"), line=9, symbol="a.f"),
+            _finding(name="Long Method", path=_p("a.py"), line=2, symbol="a.g"),
         ]
         first = build_sarif(findings, tool_version="0.3.0", root=ROOT)
         second = build_sarif(list(reversed(findings)), tool_version="0.3.0", root=ROOT)
@@ -189,11 +203,13 @@ class TestBuildSarif:
 
     def test_no_windows_paths_or_drive_letters_leak(self):
         blob = json.dumps(build_sarif([_finding()], tool_version="0.3.0", root=ROOT), sort_keys=True)
-        assert "D:/work" not in blob
-        assert "D:\\\\work" not in blob
+        assert ROOT.replace(os.sep, "/") not in blob
+        assert '"uri": "pkg/mod.py"' in blob
+        if os.name == "nt":
+            assert "D:" not in blob
 
     def test_metric_value_is_exported_when_present(self):
-        f = Finding(CATEGORY_STRUCTURAL, "High Cyclomatic Complexity", "D:/work/proj/a.py",
+        f = Finding(CATEGORY_STRUCTURAL, "High Cyclomatic Complexity", _p("a.py"),
                     "a.f", 3, "high", "cc 24", metric_value=24.0)
         result = build_sarif([f], tool_version="0.3.0", root=ROOT)["runs"][0]["results"][0]
         assert result["properties"]["metricValue"] == 24.0
@@ -208,13 +224,13 @@ class TestBuildSarif:
 class TestReportAdapter:
     def test_analyze_report_round_trips_into_sarif(self):
         report = {
-            "target": "D:/work/proj",
+            "target": ROOT,
             "findings": [
                 {
                     "type": "code",
                     "name": "Duplicate Code",
                     "description": "duplicate block",
-                    "file_path": "D:/work/proj/pkg/mod.py",
+                    "file_path": _p("pkg", "mod.py"),
                     "module_class": "pkg.mod.f",
                     "line_number": 30,
                     "severity": "high",
