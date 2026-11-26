@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Output conformance
+
+- The SARIF writer is checked against the official 2.1.0 schema, not only
+  against its own tests. The schema is committed at
+  `tests/fixtures/sarif/sarif-schema-2.1.0.json` (from
+  `https://json.schemastore.org/sarif-2.1.0.json`), so validation runs offline
+  through `scripts/validate_sarif_schema.py`.
+- Three documents pass: `tests/fixtures/sample_project` (10 results), a
+  216-result run over the `click` source tree with `--all-rules`, and a
+  `pyexamine-delta` document carrying `baselineState`, `rank` and
+  `properties.risk` (5 results). `docs/nfr-evidence.md` records the table.
+
 ### Performance evidence
 
 - `benchmarks/run_benchmark.py --repeat N` repeats the whole protocol and reports

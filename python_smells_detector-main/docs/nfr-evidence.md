@@ -58,6 +58,23 @@ Evidence that the design does what it claims (all reproducible offline):
 - All 47 rule ids are reachable from fixtures (`tests/test_rule_coverage.py`,
   `tests/fixtures/rule_coverage/`).
 
+## SARIF conformance (NFR2, machine-readable output)
+
+The SARIF writer is checked against the official 2.1.0 schema, not only against
+its own tests. The schema is committed at
+`tests/fixtures/sarif/sarif-schema-2.1.0.json` (copied from
+`https://json.schemastore.org/sarif-2.1.0.json`), so validation runs offline.
+
+| document | results | verdict |
+| --- | ---: | --- |
+| `tests/fixtures/sample_project`, `--format sarif --level-policy triage` | 10 | valid |
+| `click` source tree, `--format sarif --all-rules` | 216 | valid |
+| `pyexamine-delta`, `--format sarif --risk --include-unchanged` | 5 | valid |
+
+The third document is the one that carries the additions this fork makes:
+`baselineState` (SARIF 2.1.0 section 3.27.24), `rank` (3.27.19) and
+`properties.risk`. All three are part of the schema, which is why they pass.
+
 ## Other NFRs
 
 - Extensibility (ADR-010): a detector adapter returns the shared `Finding`
