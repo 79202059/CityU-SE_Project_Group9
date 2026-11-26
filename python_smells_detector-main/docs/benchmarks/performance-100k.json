@@ -1,0 +1,24 @@
+{
+  "project": "C:\\Users\\86159\\AppData\\Local\\Temp\\pe-bench-100k",
+  "files": 522,
+  "lines": 100077,
+  "findings": 1537,
+  "seconds": {
+    "full": 25.06,
+    "cold_with_cache_write": 22.55,
+    "warm": 0.36,
+    "changed": 28.99
+  },
+  "warm_ratio": 0.0142,
+  "nfr": {
+    "warm_ratio_target": 0.4,
+    "warm_seconds_target": 30.0,
+    "passes": true
+  },
+  "machine": {
+    "platform": "Windows-10-10.0.26300-SP0",
+    "python": "3.11.4",
+    "cpus": 16,
+    "processor": "AMD64 Family 23 Model 104 Stepping 1, AuthenticAMD"
+  }
+}

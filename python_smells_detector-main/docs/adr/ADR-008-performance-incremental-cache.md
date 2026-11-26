@@ -74,3 +74,20 @@ The cache lives at `.pyexamine-cache/` under the repository root by default
    second run must be dominated by hashing and the diff, not by the detectors.
 3. Report the warm incremental time against both NFR targets
    (≤ 40% of `T_full`, or ≤ 30 s).
+
+## Result (2026-11-26)
+
+Executed with `benchmarks/run_benchmark.py` on a generated 522-module /
+100,077-line tree (Windows 10, CPython 3.11.4, 16 CPUs):
+
+| phase | seconds |
+| --- | ---: |
+| full (no cache) | 25.06 |
+| cold (cache write) | 22.55 |
+| warm (cache hit) | 0.36 |
+| changed (memo miss) | 28.99 |
+
+NFR met: warm is 1.4% of full and 0.36 s absolute (targets: <= 40% or <= 30 s).
+The `changed` phase confirms the negative consequence recorded above - a PR
+touching one file pays the full-analysis cost because the memo key covers the
+whole tree. Details and caveats: `docs/benchmarks/performance-100k.md`.
