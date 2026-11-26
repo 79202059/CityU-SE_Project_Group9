@@ -107,7 +107,15 @@ def _finding_to_record(finding: Finding, root: str) -> dict:
 
 def _record_to_finding(record: dict, root: str) -> Finding:
     rel = record.get("file") or ""
-    file_path = os.path.join(root, rel.replace("/", os.sep)) if rel else ""
+    # ``rel`` is "." for findings that describe the tree itself (a
+    # module-level smell records the analysed directory as its file_path in
+    # ``Finding``); joining it would yield "<root>/.", which changes the
+    # SARIF fingerprint and turns one finding into NEW + RESOLVED on the next
+    # run.  Map both the empty and the "." relative path back to the root.
+    if not rel or rel == ".":
+        file_path = root
+    else:
+        file_path = os.path.join(root, rel.replace("/", os.sep))
     return Finding(
         category=record.get("category") or "code",
         smell_type=record.get("type") or "",

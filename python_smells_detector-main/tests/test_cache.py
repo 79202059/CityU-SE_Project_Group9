@@ -126,3 +126,34 @@ def test_analyze_tree_hit_reuses_cache(tmp_path, monkeypatch):
     assert len(calls) == calls_after_first, "a warm cache must not re-run the detector"
     assert second == first
     assert context_second.get("fan_in") == context_first.get("fan_in")
+
+
+def test_tree_level_finding_round_trips_to_the_root(tmp_path):
+    """A module-level smell records the analysed directory as its file_path.
+
+    Re-rooting must map that back onto the new root verbatim: storing it as
+    ``root/.`` changes the SARIF fingerprint and would turn one finding into
+    NEW + RESOLVED on the next run (regression found while auditing flask).
+    """
+    root = str(tmp_path / "tree")
+    other = str(tmp_path / "other")
+    Path(root, "pkg").mkdir(parents=True, exist_ok=True)
+    Path(other).mkdir(parents=True, exist_ok=True)
+    cache = AnalysisCache(str(tmp_path / "cache"))
+
+    tree_level = Finding(
+        category="structural",
+        smell_type="High Number of Classes (NOC)",
+        file_path=root,
+        symbol="Project",
+        line=None,
+        severity="high",
+        description="Project has 9.0 weighted classes",
+        metric_value=9.0,
+    )
+    cache.store("k", [tree_level], {}, root)
+
+    loaded, fan_in = cache.load("k", other)
+    assert loaded[0].file_path == other
+    assert loaded[0].metric_value == 9.0
+    assert fan_in == {}

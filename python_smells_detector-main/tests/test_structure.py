@@ -136,3 +136,19 @@ def test_lifecycle_says_unchanged_after_a_dissimilar_rename(tmp_path):
         fuzzy=match,
     )
     assert classified[UNCHANGED] == [head]
+
+
+def test_qualified_symbol_resolves_after_stripping_the_module_prefix(tmp_path):
+    """``Finding.symbol`` is ``module.Class`` / ``module.func``, not a bare name.
+
+    Resolving only the full dotted path fails for every prefixed finding
+    (measured: 80% of them on flask), which silently disabled the shape
+    component.  Leading segments naming the module/package must be skipped.
+    """
+    path = _write(tmp_path, "pkg/core.py", "def compute_total(x):\n" + LONG_BODY)
+    assert symbol_signature(_finding(path, "pkg.core.compute_total")) is not None
+
+
+def test_two_segment_module_symbol_still_has_no_signature(tmp_path):
+    path = _write(tmp_path, "m.py", "def f():\n    return 1\n")
+    assert symbol_signature(_finding(path, "pkg.m")) is None

@@ -77,7 +77,7 @@ Exit codes: `0` clean, `1` gate reached (or the run failed), `2` usage error.
 `docs/rule_ids.json` is the machine-readable version the registry was generated
 from.
 
-Tests: `python -m pytest tests -q` -> 431 passed (216 upstream + 215 new).
+Tests: `python -m pytest tests -q` -> 457 passed (216 upstream + 241 for the delta engine).
 `ruff check src tests` -> clean.
 
 See `docs/ci/` for a GitHub Actions workflow and the four knobs it exposes.

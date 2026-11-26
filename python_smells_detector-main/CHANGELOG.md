@@ -30,6 +30,29 @@
   `--cache-dir` (default `.pyexamine-cache/` under the repository root, ignored
   by git). See `docs/adr/ADR-008-performance-incremental-cache.md`.
 
+### Reliability fixes
+
+- `structure.py`: `Finding.symbol` is a *qualified* owner name (`module.Class`,
+  `module.func`), but `_find_node` tried only the full dotted path against the
+  module's top level, so the leftmost segment (the module or package name) never
+  matched. 80% of the findings on `flask` therefore had no AST signature and the
+  shape component silently degraded to the old weight blend. The resolver now
+  tries the full path, then drops leading segments one at a time. Signature
+  coverage on `flask` went from 19.8% to 71.9%; a complete rename now pairs as
+  `UNCHANGED` for real, not only in the unit-test fixtures.
+- `cache.py` / `baseline.py`: a module-level smell records the analysed directory
+  as its `file_path`, which `relative_path` stores as `.`. Re-rooting joined it
+  back as `<root>/.`, a *different* SARIF fingerprint from the one recorded, so
+  the next run (or the next baseline comparison) reported the same finding as
+  `NEW` + `RESOLVED` — with `--fail-on-new` that is a false gate failure. Both
+  re-rooting paths now map `.` (and the empty path) back to the root itself.
+  Reproduced on `flask`: `High Number of Classes (NOC)` flipped
+  `25a806be3816b93e` -> `b5e05f5d5e6e856d` on a cache hit; after the fix
+  cache-hit and cache-miss results are identical, and a baseline written from one
+  and compared against the other reports 0 new / 0 resolved.
+- Regression tests for all three (`test_structure.py`, `test_cache.py`,
+  `test_baseline.py`); the suite is 457 passed.
+
 ## 0.3.0
 
 Merges `fix/detector-precision` and follows it with a full review of the detectors.

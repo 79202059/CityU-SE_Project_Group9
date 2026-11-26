@@ -17,6 +17,7 @@ from code_quality_analyzer.baseline import (
     BASELINE_SCHEMA_VERSION,
     baseline_payload,
     diff_against_baseline,
+    finding_from_record,
     load_baseline,
     write_baseline,
 )
@@ -189,3 +190,28 @@ class TestGate:
         classified = {NEW: [_finding(severity="")], UNCHANGED: [], RESOLVED: []}
         assert len(gate_violations(classified, "medium")) == 1
         assert gate_violations(classified, "high") == []
+
+
+def test_tree_level_record_rebuilds_onto_the_root(tmp_path):
+    """A record whose path is "." must rebuild with ``root`` as file_path.
+
+    Module-level smells record the analysed directory; rebuilding it as
+    ``<root>/.`` changes the fingerprint and the finding would be reported as
+    NEW + RESOLVED on the next run.
+    """
+    root = str(tmp_path / "tree")
+    os.makedirs(root, exist_ok=True)
+    record = {
+        "fp": "0" * 16,
+        "rule_id": "pyex-struct-noc",
+        "name": "High Number of Classes (NOC)",
+        "category": "structural",
+        "path": ".",
+        "symbol": "Project",
+        "line": None,
+        "severity": "high",
+        "metric": 45.5,
+    }
+    rebuilt = finding_from_record(record, root)
+    assert rebuilt.file_path == root
+    assert rebuilt.metric_value == 45.5

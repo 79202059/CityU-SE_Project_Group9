@@ -107,7 +107,15 @@ def load_baseline(path: str) -> Optional[dict]:
 def finding_from_record(record: dict, root: str) -> Finding:
     """Rehydrate a baseline record into a Finding located under ``root``."""
     path = record.get("path") or ""
-    file_path = os.path.join(root, path.replace("/", os.sep)) if path else ""
+    # A module-level smell records the analysed directory as its file_path,
+    # which ``relative_path`` stores as ".".  Joining it would rebuild
+    # "<root>/.", a different SARIF fingerprint than the one the baseline
+    # recorded, so the same finding would read as NEW + RESOLVED
+    # (regression found while auditing the cache round-trip).
+    if not path or path == ".":
+        file_path = root
+    else:
+        file_path = os.path.join(root, path.replace("/", os.sep))
     return Finding(
         category=record.get("category") or "code",
         smell_type=record.get("name") or "",

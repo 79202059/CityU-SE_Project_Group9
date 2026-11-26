@@ -59,9 +59,7 @@ def _parse(path: str) -> Optional[ast.AST]:
 _DEFINITIONS = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
 
 
-def _find_node(tree: ast.AST, symbol: str) -> Optional[ast.AST]:
-    """Resolve ``Class.method`` / ``function`` against a parsed module."""
-    parts = [part for part in symbol.replace(",", ".").split(".") if part]
+def _descend(tree: ast.AST, parts) -> Optional[ast.AST]:
     current: Optional[ast.AST] = tree
     for part in parts:
         if not isinstance(current, ast.AST):
@@ -75,6 +73,30 @@ def _find_node(tree: ast.AST, symbol: str) -> Optional[ast.AST]:
             return None
         current = found
     return current if isinstance(current, _DEFINITIONS) else None
+
+
+def _find_node(tree: ast.AST, symbol: str) -> Optional[ast.AST]:
+    """Resolve a finding symbol against a parsed module.
+
+    ``Finding.symbol`` is a *qualified owner name* (``module.Class`` /
+    ``module.func``), so the leftmost segments usually name the module or a
+    package rather than a definition.  Trying only the full dotted path would
+    therefore fail for almost every real finding (measured: 80% of the
+    findings on ``flask``), silently disabling the shape component.  Try the
+    full path first, then drop leading segments one at a time and take the
+    first suffix that resolves.
+    """
+    parts = [part for part in symbol.replace(",", ".").split(".") if part]
+    if not parts:
+        return None
+    node = _descend(tree, parts)
+    if node is not None:
+        return node
+    for start in range(1, len(parts)):
+        node = _descend(tree, parts[start:])
+        if node is not None:
+            return node
+    return None
 
 
 def _tokens(node: ast.AST) -> Tuple[Token, ...]:
