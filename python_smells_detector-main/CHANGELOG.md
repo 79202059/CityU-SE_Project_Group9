@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### Continuous integration
+
+- Added `.github/workflows/ci.yml` at the **repository root**. The pipeline kept
+  in `python_smells_detector-main/.github/` was never scheduled: GitHub only reads
+  `.github/` at the root of the default branch, so the repository reported zero
+  workflows and zero runs while its CI sat there looking complete. The root copy
+  adds a workflow-level `defaults.run.working-directory` and prefixes the six
+  paths that resolve against the repository root (three artifact paths, three
+  `$GITHUB_WORKSPACE` uses in the wheel smoke test). The subdirectory copy is left
+  untouched. First scheduled run: 13 of 13 jobs green in 74 s, `457 passed`,
+  coverage 90.53% against the 85% gate, over ubuntu 3.10/3.11/3.12/3.13/3.14,
+  windows 3.13 and macos 3.13.
+- `tests/test_sarif.py` now builds its fixtures for the host platform instead of
+  hard-coding `D:/work/proj`. That literal is not an absolute path on POSIX, so
+  `relative_uri` returned it unchanged and five assertions compared an absolute
+  path against a relative one — they had only ever passed on Windows. The
+  drive-letter assertion is now Windows-only; the platform-independent assertion
+  (the analysis root never appears in the serialised result) holds everywhere.
+
 ### Matching and explanation
 
 - Rename/move matching now also scores **normalised AST shape** (`structure.py`):
