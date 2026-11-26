@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### Matching and explanation
+
+- Rename/move matching now also scores **normalised AST shape** (`structure.py`):
+  node types plus depth, identifiers and literals erased. A rename whose name
+  changed completely (`compute_total` → `tally`) now pairs as `UNCHANGED` instead
+  of `NEW` + `RESOLVED`. The shape is fuzzy evidence, never part of the exact
+  fingerprint — exact body equality would turn every `WORSENED` into `NEW`.
+  Weights are 0.40 symbol / 0.25 path / 0.15 line / 0.20 shape; when no signature
+  exists the previous 0.55 / 0.30 / 0.15 blend is used unchanged.
+- `--risk` now explains every score: text and Markdown output carry the reasons
+  (metric against its threshold, whether the diff touched the line, module fan-in,
+  detector confidence), and JSON adds `reasons` / `fan_in`.
+- `calibrate` now also calibrates `LARGE_CLASS_METHODS`, the threshold the
+  Large Class smell actually reads, instead of only the structural
+  `NOM_THRESHOLD`. Calibration of "class method count" therefore moves the
+  reported smell.
+
 ### Performance (NFR)
 
 - Added a content-addressed incremental analysis cache (`cache.py`). A tree is

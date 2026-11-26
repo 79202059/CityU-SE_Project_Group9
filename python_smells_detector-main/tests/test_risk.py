@@ -382,6 +382,44 @@ class TestScoring(unittest.TestCase):
         self.assertLessEqual(score, 100.0)
 
 
+class TestRiskReasons(unittest.TestCase):
+    def test_measured_reason_states_value_and_threshold(self):
+        finding = _finding()
+        scores = score_findings(
+            [finding],
+            thresholds=THRESHOLDS,
+            tree_root="/tree",
+            hunks={"pkg/a.py": [(9, 12)]},
+            fan_in={"pkg.a": 7},
+            fingerprint_of=lambda f: "k",
+        )
+        score = scores["k"]
+        self.assertEqual(score.fan_in_count, 7)
+        self.assertIn(
+            "class method count is 20 methods against a threshold of 10 (2.0x)",
+            score.reasons,
+        )
+        self.assertIn("the reported line is inside a changed hunk", score.reasons)
+        self.assertIn("the enclosing module is imported by 7 other module(s)", score.reasons)
+        self.assertTrue(any("detection confidence" in r for r in score.reasons))
+
+    def test_unmeasured_reason_says_so(self):
+        finding = _finding(smell_type="Middle Man", category="code", description="")
+        scores = score_findings([finding], thresholds=THRESHOLDS, fingerprint_of=lambda f: "k")
+        self.assertTrue(
+            any("no numeric metric" in reason for reason in scores["k"].reasons)
+        )
+
+    def test_reasons_survive_serialisation(self):
+        finding = _finding()
+        scores = score_findings(
+            [finding], thresholds=THRESHOLDS, tree_root="/tree", fingerprint_of=lambda f: "k"
+        )
+        payload = scores["k"].as_dict()
+        self.assertEqual(payload["reasons"], list(scores["k"].reasons))
+        self.assertEqual(payload["fan_in"], 0)
+
+
 class TestRiskScore(unittest.TestCase):
     def test_as_dict_shape(self):
         score = RiskScore(

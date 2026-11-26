@@ -133,7 +133,7 @@ FREQUENCY_PENALTY = 0.5
 
 @dataclass(frozen=True)
 class RiskScore:
-    """One finding's 0-100 risk score with its four components."""
+    """One finding's 0-100 risk score with its four components and the reasons."""
 
     score: float
     exceeds: float
@@ -144,6 +144,8 @@ class RiskScore:
     metric_value: Optional[float]
     threshold: Optional[float]
     metric_key: Optional[str]
+    fan_in_count: int = 0
+    reasons: Tuple[str, ...] = ()
 
     def as_dict(self) -> dict:
         return {
@@ -164,6 +166,8 @@ class RiskScore:
                     "threshold": self.threshold,
                 }
             ),
+            "fan_in": self.fan_in_count,
+            "reasons": list(self.reasons),
         }
 
 
@@ -221,12 +225,12 @@ def confidence_component(
     return _clamp(base * penalty)
 
 
-def centrality_component(
+def _module_fan_in(
     finding: Finding, tree_root: Optional[str], fan_in: Dict[str, int]
-) -> float:
-    """Normalised fan-in of the finding's module."""
+) -> int:
+    """How many modules depend on the finding's module (0 when unknown)."""
     if not fan_in:
-        return 0.0
+        return 0
     module = finding.symbol.split(".")[0] if finding.symbol else ""
     candidates = []
     if module:
@@ -241,7 +245,15 @@ def centrality_component(
     for candidate in candidates:
         if candidate in fan_in:
             value = max(value, int(fan_in[candidate]))
-    if value <= 0:
+    return max(0, value)
+
+
+def centrality_component(
+    finding: Finding, tree_root: Optional[str], fan_in: Dict[str, int]
+) -> float:
+    """Normalised fan-in of the finding's module."""
+    value = _module_fan_in(finding, tree_root, fan_in)
+    if value <= 0 or not fan_in:
         return 0.0
     peak = max(int(v) for v in fan_in.values()) or 1
     return _clamp(math.log1p(value) / math.log1p(peak))
@@ -346,6 +358,77 @@ def change_component(
 # Scoring
 # --------------------------------------------------------------------------- #
 
+# Human wording for the metric behind the "exceeds" component (PROJECT_OVERVIEW
+# 4.4 asks every score to explain itself, not just publish four numbers).
+_METRIC_LABELS: Dict[str, Tuple[str, str]] = {
+    "LONG_METHOD_LINES": ("method length", "lines"),
+    "LARGE_CLASS_METHODS": ("class method count", "methods"),
+    "NOM_THRESHOLD": ("class method count", "methods"),
+    "CYCLOMATIC_COMPLEXITY_THRESHOLD": ("cyclomatic complexity", "branch points"),
+    "LOC_THRESHOLD": ("module size", "code lines"),
+    "MAX_FILE_LENGTH": ("file length", "lines"),
+    "MAX_FANOUT": ("module fan-out", "modules"),
+    "GOD_OBJECT_FUNCTIONS": ("module function count", "functions"),
+}
+
+
+def metric_label(metric_key: Optional[str]) -> Tuple[str, str]:
+    """Readable name and unit for a threshold key."""
+    if not metric_key:
+        return ("metric", "units")
+    return _METRIC_LABELS.get(metric_key, (metric_key.lower().replace("_", " "), "units"))
+
+
+def risk_reasons(
+    *,
+    measured: bool,
+    value: Optional[float],
+    threshold: Optional[float],
+    metric_key: Optional[str],
+    change: float,
+    fan_in_count: int,
+    confidence: float,
+) -> Tuple[str, ...]:
+    """The sentences behind one score, in the order a reviewer reads them.
+
+    Wording is deliberately evidence-first: the number, the threshold it is
+    measured against, whether the diff touched it, how central the module is,
+    and how much the detector itself is trusted.  Lifecycle wording ("added by
+    this change") belongs to the caller, which knows the state.
+    """
+    reasons: List[str] = []
+    label, unit = metric_label(metric_key)
+    if measured and threshold and value is not None:
+        ratio = value / threshold if threshold else 0.0
+        if ratio >= 1.0:
+            reasons.append(
+                "%s is %g %s against a threshold of %g (%.1fx)"
+                % (label, value, unit, threshold, ratio)
+            )
+        else:
+            reasons.append(
+                "%s is %g %s, inside the %g threshold"
+                % (label, value, unit, threshold)
+            )
+    elif value is not None and threshold is None:
+        reasons.append(
+            "%s is %g %s but no threshold is configured; severity band used instead"
+            % (label, value, unit)
+        )
+    else:
+        reasons.append("no numeric metric for this rule; severity band used instead")
+
+    if change >= 1.0:
+        reasons.append("the reported line is inside a changed hunk")
+    elif change > 0.0:
+        reasons.append("the containing file changed, but the reported line did not")
+
+    if fan_in_count > 0:
+        reasons.append("the enclosing module is imported by %d other module(s)" % fan_in_count)
+
+    reasons.append("detection confidence %.2f" % confidence)
+    return tuple(reasons)
+
 
 def score_findings(
     findings: Sequence[Finding],
@@ -375,12 +458,22 @@ def score_findings(
         share = counts.get(rule_id, 1) / total
         confidence = confidence_component(finding, share, measured)
         centrality = centrality_component(finding, tree_root, fan_in)
+        fan_in_count = _module_fan_in(finding, tree_root, fan_in)
         change = change_component(finding, tree_root, hunks)
         score = 100.0 * (
             W_EXCEEDS * exceeds
             + W_CHANGE * change
             + W_CENTRALITY * centrality
             + W_CONFIDENCE * confidence
+        )
+        reasons = risk_reasons(
+            measured=measured,
+            value=value,
+            threshold=threshold,
+            metric_key=key,
+            change=change,
+            fan_in_count=fan_in_count,
+            confidence=confidence,
         )
         scores[fingerprint_of(finding)] = RiskScore(
             score=round(score, 2),
@@ -392,6 +485,8 @@ def score_findings(
             metric_value=value,
             threshold=threshold,
             metric_key=key,
+            fan_in_count=fan_in_count,
+            reasons=reasons,
         )
     return scores
 

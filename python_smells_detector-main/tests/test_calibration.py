@@ -195,6 +195,54 @@ class TestCalibration:
             calibrate(root, _handler(), max_multiplier=0.5)
 
 
+def _class_project(root, classes=3, methods=20, getters=1):
+    lines = []
+    for klass in range(classes):
+        lines.append("class Big%d:" % klass)
+        for index in range(methods):
+            lines += [
+                "    def m%d(self, x):" % index,
+                "        y = x + %d" % index,
+                "        if y > 0:",
+                "            y = y - 1",
+                "        return y",
+            ]
+        for index in range(getters):
+            lines += ["    def g%d(self):" % index, "        return 0"]
+        lines.append("")
+    return _write_project(root, {"big.py": "\n".join(lines) + "\n"})
+
+
+class TestLargeClassMetric:
+    """The calibrated "class method count" must move the Large Class threshold.
+
+    Large Class reads ``LARGE_CLASS_METHODS`` (non-trivial methods), while the
+    structural detector reads ``NOM_THRESHOLD`` (all methods).  Calibrating only
+    the latter left the smell the project actually reports untouched.
+    """
+
+    def test_count_matches_the_large_class_detector(self, workdir):
+        root = _class_project(os.path.join(workdir, "lc"), classes=1, methods=20)
+        code = CodeSmellDetector(_handler().get_thresholds("code_smells"))
+        code.detect_smells(os.path.join(root, "big.py"))
+        reported = [smell for smell in code.code_smells if smell.name == "Large Class"]
+        assert len(reported) == 1
+        assert "20 non-trivial methods" in reported[0].description
+
+        structural = StructuralSmellDetector(_handler().get_thresholds("structural_smells"))
+        structural.analyze_directory(root)
+        measured = collect_metric_values(structural)["LARGE_CLASS_METHODS"]
+        assert max(measured) == 20
+
+    def test_threshold_is_calibrated(self, workdir):
+        root = _class_project(os.path.join(workdir, "lc2"), classes=3, methods=20)
+        report = calibrate(root, _handler(), min_samples=1)
+        entry = report["metrics"]["LARGE_CLASS_METHODS"]
+        assert entry["applied"] is True
+        assert entry["proposed"] == 20
+        assert entry["default"] == 15
+
+
 class TestThresholdFile:
     def test_round_trip_through_config_handler(self, workdir):
         root = _huge_project(os.path.join(workdir, "round"))

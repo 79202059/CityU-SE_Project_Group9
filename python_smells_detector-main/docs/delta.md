@@ -20,9 +20,9 @@ with `git worktree`, so the working tree is never touched.
 | --- | --- | --- |
 | Two-version comparison, four states | `--base` / `--head` | which smells are new, worsened, resolved, unchanged between two commits |
 | Stable fingerprints | always on | the same smell keeps one identity even when its line number moves |
-| Rename / move matching | `--no-fuzzy`, `--fuzzy-threshold` | a renamed or moved function is not reported as one new smell plus one fixed smell |
-| Adaptive thresholds | `pyexamine-delta calibrate` | what "long" and "large" mean *in this project*, not in a library average |
-| Explainable risk score | `--risk`, `--min-risk` | which of the new findings deserve review first, and why (four weighted components) |
+| Rename / move matching | `--no-fuzzy`, `--fuzzy-threshold` | a renamed or moved function is not reported as one new smell plus one fixed smell; a completely different name still pairs when the body shape is intact (AST shape is a scoring signal, not part of the exact key) |
+| Adaptive thresholds | `pyexamine-delta calibrate` | what "long" and "large" mean *in this project*, not in a library average; moves `LARGE_CLASS_METHODS` as well as the structural `NOM_THRESHOLD` |
+| Explainable risk score | `--risk`, `--min-risk` | which of the new findings deserve review first, with the reasons spelled out (metric vs threshold, diff overlap, fan-in, confidence) |
 | CI gate | `--fail-on-new`, `--fail-on-worsened`, `--max-new` | fail the build on new findings, not on the whole project's backlog |
 | SARIF 2.1.0 | `--format sarif` | GitHub code scanning annotations, inline on the diff |
 | PR summary | `--format markdown` | a table for `$GITHUB_STEP_SUMMARY` |

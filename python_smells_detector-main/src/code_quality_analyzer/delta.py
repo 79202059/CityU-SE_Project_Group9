@@ -402,10 +402,11 @@ def render_text(
             location = relative_path(finding.file_path, root)
             symbol = f"{finding.symbol}" if finding.symbol else location
             suffix = ""
+            risk_score: Optional[RiskScore] = None
             if risks is not None and state in (NEW, WORSENED):
-                score = risks.get(fingerprint(finding, root))
-                if score is not None:
-                    suffix = " risk=%.1f" % score.score
+                risk_score = risks.get(fingerprint(finding, root))
+                if risk_score is not None:
+                    suffix = " risk=%.1f" % risk_score.score
             if state == WORSENED and worsen_details:
                 evidence = worsen_details.get(fingerprint_string(finding, root))
                 if evidence:
@@ -421,6 +422,17 @@ def render_text(
                 f"  - [{finding.category}] {finding.smell_type} "
                 f"({symbol}) severity={finding.severity}{suffix}"
             )
+            if risk_score is not None:
+                lines.append(
+                    "      why: %s"
+                    % (
+                        "added by this change"
+                        if state == NEW
+                        else "pre-existing, worsened by this change"
+                    )
+                )
+                for reason in risk_score.reasons:
+                    lines.append("        - %s" % reason)
         lines.append("")
 
     lines.append("Summary")
@@ -627,7 +639,12 @@ def render_markdown(
             ]
             if risks is not None:
                 score = risks.get(fingerprint(finding, head_root))
-                row.insert(0, "%.1f" % score.score if score is not None else "n/a")
+                cell = "%.1f" % score.score if score is not None else "n/a"
+                if score is not None and score.reasons:
+                    cell += "<br>" + "<br>".join(
+                        _md_cell(reason) for reason in score.reasons
+                    )
+                row.insert(0, cell)
             lines.append("| " + " | ".join(row) + " |")
         hidden = len(new_items) - limit
         if hidden > 0:

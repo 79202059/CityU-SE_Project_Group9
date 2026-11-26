@@ -66,9 +66,16 @@ METRICS: Sequence[Metric] = (
         "non-blank, non-comment, non-docstring lines per function",
     ),
     Metric(
+        "code_smells",
+        "LARGE_CLASS_METHODS",
+        "Class method count (non-trivial)",
+        "methods",
+        "non-dunder methods with more than a single return/assign, as detect_large_classes counts them",
+    ),
+    Metric(
         "structural_smells",
         "NOM_THRESHOLD",
-        "Class method count",
+        "Class method count (all)",
         "methods",
         "methods declared directly in a class body",
     ),
@@ -150,6 +157,32 @@ def method_length(node, lines: List[str]) -> int:
     return total
 
 
+# The Large Class detector skips exception hierarchies outright (its own
+# ``_is_exception_class`` rule).  Mirroring that here keeps the measured
+# population equal to the population the threshold is applied to.
+_EXCEPTION_SUFFIXES = ("Exception", "Error")
+
+
+def _is_exception_hierarchy(bases) -> bool:
+    for base in bases:
+        name = str(base).rsplit(".", 1)[-1]
+        if name.endswith(_EXCEPTION_SUFFIXES):
+            return True
+    return False
+
+
+def non_trivial_method_count(methods) -> int:
+    """How ``detect_large_classes`` counts methods for one class."""
+    count = 0
+    for method in methods:
+        if _is_dunder(method.name):
+            continue
+        if len(method.body) == 1 and isinstance(method.body[0], (ast.Return, ast.Assign)):
+            continue
+        count += 1
+    return count
+
+
 def collect_metric_values(detector: StructuralSmellDetector) -> Dict[str, List[float]]:
     """Raw metric values for every object the detectors would inspect.
 
@@ -180,6 +213,8 @@ def collect_metric_values(detector: StructuralSmellDetector) -> Dict[str, List[f
         methods = info["methods"]
         if methods:
             values["NOM_THRESHOLD"].append(len(methods))
+            if not _is_exception_hierarchy(info.get("base_classes", ())):
+                values["LARGE_CLASS_METHODS"].append(non_trivial_method_count(methods))
         module = class_name.rsplit(".", 1)[0]
         lines = detector.module_info.get(module, {}).get("lines", [])
         for node in methods:

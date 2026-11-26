@@ -142,6 +142,27 @@ class TestMarkdownLayout(unittest.TestCase):
         text = self._render(self._classified(new=[hostile]))
         self.assertIn("Odd \\| Rule", text)
 
+    def test_risk_cell_carries_the_reasons(self):
+        from code_quality_analyzer.risk import RiskScore
+
+        finding = _finding()
+        risks = {
+            fingerprint(finding, HEAD_ROOT): RiskScore(
+                score=55.0,
+                exceeds=0.5,
+                change=1.0,
+                centrality=0.0,
+                confidence=0.9,
+                measured=True,
+                metric_value=77.0,
+                threshold=45.0,
+                metric_key="LONG_METHOD_LINES",
+                reasons=("method length is 77 lines against a threshold of 45 (1.7x)",),
+            )
+        }
+        text = self._render(self._classified(new=[finding]), risks=risks)
+        self.assertIn("55.0<br>method length is 77 lines", text)
+
     def test_structural_category_survives(self):
         structural = _finding(
             smell_type="Deep Nesting", category=CATEGORY_STRUCTURAL, symbol="f", line=3
