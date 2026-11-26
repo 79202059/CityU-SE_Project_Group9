@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 470" width="100%" role="img" aria-label="Sprint 2 — Matching &amp; calibration">
+<rect width="920" height="470" fill="#ffffff"/>
+<style>text{font-family:"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}</style>
+<text x="74.0" y="34.0" font-size="19" fill="#0f172a" text-anchor="start" font-weight="600">Sprint 2 — Matching &amp; calibration</text>
+<text x="74.0" y="56.0" font-size="12.5" fill="#64748b" text-anchor="start" font-weight="400">Oct 12 – Nov 6, 2026 · Weeks 6–9 · 21 SP committed · 21 SP delivered</text>
+<line x1="712" y1="30" x2="734" y2="30" stroke="#2563eb" stroke-width="2.4"/>
+<text x="739.0" y="34.0" font-size="11" fill="#64748b" text-anchor="start" font-weight="400">actual</text>
+<line x1="794" y1="30" x2="816" y2="30" stroke="#a8b3c1" stroke-width="2.4" stroke-dasharray="5 4"/>
+<text x="821.0" y="34.0" font-size="11" fill="#64748b" text-anchor="start" font-weight="400">ideal</text>
+<line x1="74" y1="386.0" x2="876" y2="386.0" stroke="#e8ebf0" stroke-width="1"/>
+<text x="62.0" y="390.0" font-size="11" fill="#94a3b8" text-anchor="end" font-weight="400">0</text>
+<line x1="74" y1="326.4" x2="876" y2="326.4" stroke="#e8ebf0" stroke-width="1"/>
+<text x="62.0" y="330.4" font-size="11" fill="#94a3b8" text-anchor="end" font-weight="400">5</text>
+<line x1="74" y1="266.8" x2="876" y2="266.8" stroke="#e8ebf0" stroke-width="1"/>
+<text x="62.0" y="270.8" font-size="11" fill="#94a3b8" text-anchor="end" font-weight="400">10</text>
+<line x1="74" y1="207.2" x2="876" y2="207.2" stroke="#e8ebf0" stroke-width="1"/>
+<text x="62.0" y="211.2" font-size="11" fill="#94a3b8" text-anchor="end" font-weight="400">15</text>
+<line x1="74" y1="147.6" x2="876" y2="147.6" stroke="#e8ebf0" stroke-width="1"/>
+<text x="62.0" y="151.6" font-size="11" fill="#94a3b8" text-anchor="end" font-weight="400">20</text>
+<line x1="74" y1="88.0" x2="876" y2="88.0" stroke="#e8ebf0" stroke-width="1"/>
+<text x="62.0" y="92.0" font-size="11" fill="#94a3b8" text-anchor="end" font-weight="400">25</text>
+<text transform="rotate(-90 18 237)" x="18.0" y="237.0" font-size="11" fill="#64748b" text-anchor="middle" font-weight="400">Story points remaining</text>
+<text x="74.0" y="408.0" font-size="10.5" fill="#94a3b8" text-anchor="middle" font-weight="400">Oct 12</text>
+<text x="242.8" y="408.0" font-size="10.5" fill="#94a3b8" text-anchor="middle" font-weight="400">Oct 16</text>
+<text x="411.7" y="408.0" font-size="10.5" fill="#94a3b8" text-anchor="middle" font-weight="400">Oct 22</text>
+<text x="580.5" y="408.0" font-size="10.5" fill="#94a3b8" text-anchor="middle" font-weight="400">Oct 28</text>
+<text x="749.4" y="408.0" font-size="10.5" fill="#94a3b8" text-anchor="middle" font-weight="400">Nov 3</text>
+<text x="876.0" y="408.0" font-size="10.5" fill="#94a3b8" text-anchor="middle" font-weight="400">Nov 6</text>
+<text x="475.0" y="424.0" font-size="11" fill="#64748b" text-anchor="middle" font-weight="400">Sprint duration</text>
+<line x1="74.0" y1="135.7" x2="876.0" y2="386.0" stroke="#a8b3c1" stroke-width="2" stroke-dasharray="6 5"/>
+<path d="M 74.0 135.7 L 116.2 135.7 L 158.4 171.4 L 200.6 171.4 L 242.8 171.4 L 285.1 171.4 L 327.3 207.2 L 369.5 207.2 L 411.7 207.2 L 453.9 207.2 L 496.1 266.8 L 538.3 266.8 L 580.5 266.8 L 622.7 266.8 L 664.9 266.8 L 707.2 326.4 L 749.4 326.4 L 791.6 326.4 L 833.8 386.0 L 876.0 386.0 L 876.0 386.0 L 74.0 386.0 Z" fill="#2563eb" opacity="0.06"/>
+<path d="M 74.0 135.7 L 116.2 135.7 L 158.4 171.4 L 200.6 171.4 L 242.8 171.4 L 285.1 171.4 L 327.3 207.2 L 369.5 207.2 L 411.7 207.2 L 453.9 207.2 L 496.1 266.8 L 538.3 266.8 L 580.5 266.8 L 622.7 266.8 L 664.9 266.8 L 707.2 326.4 L 749.4 326.4 L 791.6 326.4 L 833.8 386.0 L 876.0 386.0" fill="none" stroke="#2563eb" stroke-width="2.8" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="74.0" cy="135.7" r="3.5" fill="#2563eb" stroke="#2563eb" stroke-width="1.6"><title>Oct 12: 21 SP — Sprint planning; 21 SP committed</title></circle>
+<circle cx="116.2" cy="135.7" r="3.5" fill="#2563eb" stroke="#2563eb" stroke-width="1.6"><title>Oct 13: 21 SP — US-08 normalised AST signature design review</title></circle>
+<circle cx="158.4" cy="171.4" r="3.5" fill="#2563eb" stroke="#2563eb" stroke-width="1.6"><title>Oct 14: 18 SP — US-10 done (3 SP): WORSENED via metric delta</title></circle>
+<circle cx="200.6" cy="171.4" r="3.5" fill="#2563eb" stroke="#2563eb" stroke-width="1.6"><title>Oct 15: 18 SP — US-08 normalisation rules: names, docstrings, literals</title></circle>
+<circle cx="242.8" cy="171.4" r="3.5" fill="#2563eb" stroke="#2563eb" stroke-width="1.6"><title>Oct 16: 18 SP — US-08 golden fingerprints on tests/fixtures/sample_project</title></circle>
+<circle cx="285.1" cy="171.4" r="3.5" fill="#2563eb" stroke="#2563eb" stroke-width="1.6"><title>Oct 19: 18 SP — US-09 fuzzy scoring spike; symbol similarity weights</title></circle>
+<circle cx="327.3" cy="207.2" r="3.5" fill="#2563eb" stroke="#2563eb" stroke-width="1.6"><title>Oct 20: 15 SP — US-12 done (3 SP): 24 controlled mutation commits</title></circle>
+<circle cx="369.5" cy="207.2" r="3.5" fill="#2563eb" stroke="#2563eb" stroke-width="1.6"><title>Oct 21: 15 SP — US-09 rename fixtures; threshold sweep 0.50-0.75</title></circle>
+<circle cx="411.7" cy="207.2" r="3.5" fill="#2563eb" stroke="#2563eb" stroke-width="1.6"><title>Oct 22: 15 SP — US-09 cross-file move cases failing</title></circle>
+<circle cx="453.9" cy="207.2" r="3.5" fill="#2563eb" stroke="#2563eb" stroke-width="1.6"><title>Oct 23: 15 SP — US-09 default threshold 0.62 accepted after sweep</title></circle>
+<circle cx="496.1" cy="266.8" r="3.5" fill="#2563eb" stroke="#2563eb" stroke-width="1.6"><title>Oct 26: 10 SP — US-08 done (5 SP): AST signature matching</title></circle>
+<circle cx="538.3" cy="266.8" r="3.5" fill="#2563eb" stroke="#2563eb" stroke-width="1.6"><title>Oct 27: 10 SP — US-09 follow-up: docstring-only edits must not create NEW</title></circle>
+<circle cx="580.5" cy="266.8" r="3.5" fill="#2563eb" stroke="#2563eb" stroke-width="1.6"><title>Oct 28: 10 SP — US-09 review feedback applied</title></circle>
+<circle cx="622.7" cy="266.8" r="3.5" fill="#2563eb" stroke="#2563eb" stroke-width="1.6"><title>Oct 29: 10 SP — US-09 merged to main</title></circle>
+<circle cx="664.9" cy="266.8" r="3.5" fill="#2563eb" stroke="#2563eb" stroke-width="1.6"><title>Oct 30: 10 SP — US-11 percentile sweep on 6 candidate repositories</title></circle>
+<circle cx="707.2" cy="326.4" r="3.5" fill="#2563eb" stroke="#2563eb" stroke-width="1.6"><title>Nov 2: 5 SP — US-09 done (5 SP): rename / move matching</title></circle>
+<circle cx="749.4" cy="326.4" r="3.5" fill="#2563eb" stroke="#2563eb" stroke-width="1.6"><title>Nov 3: 5 SP — US-11 max-multiplier guard + YAML emission</title></circle>
+<circle cx="791.6" cy="326.4" r="3.5" fill="#2563eb" stroke="#2563eb" stroke-width="1.6"><title>Nov 4: 5 SP — US-11 docs; negative-value and tiny-project guards</title></circle>
+<circle cx="833.8" cy="386.0" r="3.5" fill="#2563eb" stroke="#2563eb" stroke-width="1.6"><title>Nov 5: 0 SP — US-11 done (5 SP): calibrate command</title></circle>
+<circle cx="876.0" cy="386.0" r="3.5" fill="#2563eb" stroke="#2563eb" stroke-width="1.6"><title>Nov 6: 0 SP — Sprint review; evaluation contract frozen</title></circle>
+<text x="158.4" y="161.4" font-size="10.5" fill="#0f172a" text-anchor="middle" font-weight="600">18</text>
+<text x="327.3" y="197.2" font-size="10.5" fill="#0f172a" text-anchor="middle" font-weight="600">15</text>
+<text x="496.1" y="256.8" font-size="10.5" fill="#0f172a" text-anchor="middle" font-weight="600">10</text>
+<text x="707.2" y="316.4" font-size="10.5" fill="#0f172a" text-anchor="middle" font-weight="600">5</text>
+<text x="833.8" y="376.0" font-size="10.5" fill="#0f172a" text-anchor="middle" font-weight="600">0</text>
+<text x="74.0" y="452.0" font-size="10.5" fill="#94a3b8" text-anchor="start" font-weight="400">Source: data/burndown-sprint-2.csv  ·  generated 2026-11-26</text>
+</svg>

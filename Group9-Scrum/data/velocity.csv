@@ -1,0 +1,4 @@
+sprint,label,committed,completed,status
+1,"Sprint 1 (Sep 14 - Oct 9)",21,21,delivered
+2,"Sprint 2 (Oct 12 - Nov 6)",21,21,delivered
+3,"Sprint 3 (Nov 9 - Dec 4)",30,22,in progress (forecast 30)
