@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Performance evidence
+
+- `benchmarks/run_benchmark.py --repeat N` repeats the whole protocol and reports
+  the per-phase median and min-max range, as `EVALUATION_CONTRACT.md` section 8
+  requires. The `changed` phase now restores the file it edits, so repeated runs
+  measure the same tree, and the script asserts that `changed` reports the same
+  number of findings as `full`.
+- Re-measured the 100k corpus three times: `changed` 14.06 s median
+  (12.87-14.20 s), `full` 13.74 s (13.06-14.03 s), so `changed / full` is
+  102.3 % and the relative NFR clause is still not met, while the absolute
+  clause (<= 30 s) is. `docs/benchmarks/performance-100k.md` and
+  `docs/nfr-evidence.md` carry the numbers and the environment caveat.
+
 ### Continuous integration
 
 - Added `.github/workflows/ci.yml` at the **repository root**. The pipeline kept

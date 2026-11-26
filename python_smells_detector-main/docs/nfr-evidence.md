@@ -22,15 +22,15 @@ accumulate state across files.
 
 | clause | verdict | evidence |
 | --- | --- | --- |
-| relative: changed / full <= 40 % | **not met** | 112.7 % (this machine) / 115.7 % (earlier machine) |
-| absolute: changed <= 30 s | **met** | 14.16 s / 28.99 s, `docs/benchmarks/performance-100k.json` |
-| warm / full | informational only | 0.6 % / 1.4 %; a repeated run, not an incremental one |
+| relative: changed / full <= 40 % | **not met** | 102.3 % (median of 3 runs, this machine); 100.2 %, 103.3 %, 98.5 % per run / 115.7 % (earlier machine) |
+| absolute: changed <= 30 s | **met** | 14.06 s median, range 12.87-14.20 s (3 runs, this machine) / 28.99 s (earlier machine); `docs/benchmarks/performance-100k.json` |
+| warm / full | informational only | 0.5 % / 1.4 %; a repeated run, not an incremental one |
 
 Do not write "incremental analysis" for the warm number. A repeated gate run on
 an unchanged tree is nearly free; a one-line change pays the full cost.
 
 Limits to state in the report: generated corpus (about 100k lines, 522 modules,
-1537 findings), one run per phase, no variance estimate, single process.
+1537 findings), three runs per phase with the median reported (per-run `changed` 12.87-14.20 s), a single process, and an environment that differs from `EVALUATION_CONTRACT.md` section 8 (CPython 3.14.7 on 32 cores instead of Python 3.13 on 8 cores).
 
 ## NFR2 - reliability (ADR-009)
 
@@ -67,7 +67,7 @@ Evidence that the design does what it claims (all reproducible offline):
 
 ## Verification evidence (commit level)
 
-- Head at the time of writing: `c1e8c8c` on `main`.
+- Head at the time of writing: the commit that added this index (`b95e694` was the previous one).
 - CI run `45838055833`: 13 of 13 jobs green in 76 s, including
   ubuntu 3.10/3.11/3.12/3.13/3.14, windows 3.13, macos 3.13, minimum
   dependencies, docs (`sphinx-build -W`), self-analysis, dependency audit and
@@ -90,7 +90,7 @@ python -m pytest tests -q --cov=code_quality_analyzer --cov-fail-under=85
 
 # performance evidence (about 30 s per phase on a 32-core machine)
 python -m benchmarks.run_benchmark --root <dir> --target-lines 100000 \
-  --json docs/benchmarks/performance-100k.json
+  --repeat 3 --json docs/benchmarks/performance-100k.json
 
 # lifecycle evidence on a real repository
 pyexamine-delta <repo> --base origin/main --head HEAD --format markdown --risk

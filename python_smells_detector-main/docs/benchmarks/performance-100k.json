@@ -1,33 +1,33 @@
 {
   "project": "bench100k",
   "files": 522,
-  "lines": 100078,
+  "lines": 100077,
   "findings": 1537,
   "seconds": {
-    "full": 12.56,
-    "cold_with_cache_write": 13.49,
+    "full": 13.74,
+    "cold_with_cache_write": 13.8,
     "warm": 0.07,
-    "changed": 14.16
+    "changed": 14.06
   },
   "ratios": {
-    "changed_over_full": 1.1272,
-    "warm_over_full": 0.0058
+    "changed_over_full": 1.0233,
+    "warm_over_full": 0.0051
   },
   "nfr": {
     "requirement": "incremental analysis <= 40 % of a full run, or <= 30 s",
     "relative": {
-      "observed": 1.1272,
+      "observed": 1.0233,
       "target": 0.4,
       "passes": false
     },
     "absolute": {
-      "observed_seconds": 14.16,
+      "observed_seconds": 14.06,
       "target": 30.0,
       "passes": true
     },
     "warm_repeat_run": {
       "observed_seconds": 0.07,
-      "observed_over_full": 0.0058,
+      "observed_over_full": 0.0051,
       "note": "a repeated run on unchanged sources, not the requirement"
     },
     "passes": true
@@ -37,5 +37,59 @@
     "python": "3.14.7",
     "cpus": 32,
     "processor": "AMD64 Family 26 Model 68 Stepping 0, AuthenticAMD"
+  },
+  "repetitions": {
+    "count": 3,
+    "protocol": "each run repeats the full / cold / warm / changed sequence on an unchanged tree",
+    "runs": [
+      {
+        "seconds": {
+          "full": 14.03,
+          "cold_with_cache_write": 15.36,
+          "warm": 0.08,
+          "changed": 14.06
+        }
+      },
+      {
+        "seconds": {
+          "full": 13.74,
+          "cold_with_cache_write": 13.8,
+          "warm": 0.07,
+          "changed": 14.2
+        }
+      },
+      {
+        "seconds": {
+          "full": 13.06,
+          "cold_with_cache_write": 13.11,
+          "warm": 0.07,
+          "changed": 12.87
+        }
+      }
+    ],
+    "median": {
+      "full": 13.74,
+      "cold_with_cache_write": 13.8,
+      "warm": 0.07,
+      "changed": 14.06
+    },
+    "range": {
+      "full": {
+        "min": 13.06,
+        "max": 14.03
+      },
+      "cold_with_cache_write": {
+        "min": 13.11,
+        "max": 15.36
+      },
+      "warm": {
+        "min": 0.07,
+        "max": 0.08
+      },
+      "changed": {
+        "min": 12.87,
+        "max": 14.2
+      }
+    }
   }
 }

@@ -13,10 +13,15 @@ Protocol (fixed, so numbers are comparable across machines):
    whole-tree memo misses. This is the honest cost of an actual pull-request
    diff under the current design (per-file incrementality is future work).
 
-The NFR: an incremental (pull-request) analysis <= 40 % of a full run, or
-<= 30 s in absolute terms. The `changed` phase models that case. The `warm`
-phase answers a different question (a repeated gate run on unchanged
-sources) and is reported for information only.
+The NFR (EVALUATION_CONTRACT.md section 8): an incremental (pull-request)
+analysis <= 40 % of a full run, or <= 30 s in absolute terms. The `changed`
+phase models that case. The `warm` phase answers a different question (a
+repeated gate run on unchanged sources) and is reported for information only.
+
+The contract also asks for 3 runs and a median with a range, so `--repeat N`
+repeats the whole protocol N times and reports the per-phase median and the
+min-max spread. `run()` restores the file it touches, so repetitions measure
+the same tree every time.
 """
 
 from __future__ import annotations
@@ -36,6 +41,8 @@ from code_quality_analyzer.delta import analyze_tree
 
 RATIO_TARGET = 0.40
 SECONDS_TARGET = 30.0
+PHASES = ("full", "cold_with_cache_write", "warm", "changed")
+CHANGE_MARKER = "# one line changed in this pull request"
 
 
 def _timed(call):
@@ -53,6 +60,52 @@ def _count_lines(root: str) -> int:
             with open(os.path.join(dirpath, name), "r", encoding="utf-8", errors="replace") as handle:
                 total += sum(1 for _ in handle)
     return total
+
+
+def _median(values):
+    ordered = sorted(values)
+    size = len(ordered)
+    if size == 0:
+        return 0.0
+    middle = size // 2
+    if size % 2:
+        return ordered[middle]
+    return (ordered[middle - 1] + ordered[middle]) / 2.0
+
+
+def _nfr_block(seconds: dict) -> dict:
+    full_seconds = seconds["full"]
+    changed_seconds = seconds["changed"]
+    warm_seconds = seconds["warm"]
+    changed_ratio = changed_seconds / full_seconds if full_seconds else 0.0
+    warm_ratio = warm_seconds / full_seconds if full_seconds else 0.0
+    relative_ok = changed_ratio <= RATIO_TARGET
+    absolute_ok = changed_seconds <= SECONDS_TARGET
+    return {
+        "ratios": {
+            "changed_over_full": round(changed_ratio, 4),
+            "warm_over_full": round(warm_ratio, 4),
+        },
+        "nfr": {
+            "requirement": "incremental analysis <= 40 % of a full run, or <= 30 s",
+            "relative": {
+                "observed": round(changed_ratio, 4),
+                "target": RATIO_TARGET,
+                "passes": relative_ok,
+            },
+            "absolute": {
+                "observed_seconds": round(changed_seconds, 2),
+                "target": SECONDS_TARGET,
+                "passes": absolute_ok,
+            },
+            "warm_repeat_run": {
+                "observed_seconds": round(warm_seconds, 2),
+                "observed_over_full": round(warm_ratio, 4),
+                "note": "a repeated run on unchanged sources, not the requirement",
+            },
+            "passes": relative_ok or absolute_ok,
+        },
+    }
 
 
 def run(root: str, config_path: str) -> dict:
@@ -85,63 +138,97 @@ def run(root: str, config_path: str) -> dict:
                 break
         if target:
             break
-    with open(target, "a", encoding="utf-8", newline="\n") as handle:
-        handle.write("# one line changed in this pull request\n")
-    changed_seconds, changed_findings = _timed(
-        lambda: analyze_tree(root, handler, cache=AnalysisCache(cache_dir))
-    )
+
+    with open(target, "r", encoding="utf-8") as handle:
+        original = handle.read()
+    if original.endswith("\n") or not original:
+        touched = original + CHANGE_MARKER + "\n"
+    else:
+        touched = original + "\n" + CHANGE_MARKER + "\n"
+    with open(target, "w", encoding="utf-8", newline="\n") as handle:
+        handle.write(touched)
+    try:
+        changed_seconds, changed_findings = _timed(
+            lambda: analyze_tree(root, handler, cache=AnalysisCache(cache_dir))
+        )
+    finally:
+        with open(target, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(original)
 
     if len(warm_findings) != len(full_findings):
         raise RuntimeError(
             "cache changed the result: full=%d warm=%d"
             % (len(full_findings), len(warm_findings))
         )
+    if len(changed_findings) != len(full_findings):
+        raise RuntimeError(
+            "the diff changed the result: full=%d changed=%d"
+            % (len(full_findings), len(changed_findings))
+        )
 
-    changed_ratio = changed_seconds / full_seconds if full_seconds else 0.0
-    warm_ratio = warm_seconds / full_seconds if full_seconds else 0.0
-    relative_ok = changed_ratio <= RATIO_TARGET
-    absolute_ok = changed_seconds <= SECONDS_TARGET
-    return {
+    seconds = {
+        "full": round(full_seconds, 2),
+        "cold_with_cache_write": round(cold_seconds, 2),
+        "warm": round(warm_seconds, 2),
+        "changed": round(changed_seconds, 2),
+    }
+    result = {
         "project": os.path.basename(os.path.abspath(root)),
         "files": files,
         "lines": lines,
         "findings": len(full_findings),
-        "seconds": {
-            "full": round(full_seconds, 2),
-            "cold_with_cache_write": round(cold_seconds, 2),
-            "warm": round(warm_seconds, 2),
-            "changed": round(changed_seconds, 2),
-        },
-        "ratios": {
-            "changed_over_full": round(changed_ratio, 4),
-            "warm_over_full": round(warm_ratio, 4),
-        },
-        "nfr": {
-            "requirement": "incremental analysis <= 40 % of a full run, or <= 30 s",
-            "relative": {
-                "observed": round(changed_ratio, 4),
-                "target": RATIO_TARGET,
-                "passes": relative_ok,
-            },
-            "absolute": {
-                "observed_seconds": round(changed_seconds, 2),
-                "target": SECONDS_TARGET,
-                "passes": absolute_ok,
-            },
-            "warm_repeat_run": {
-                "observed_seconds": round(warm_seconds, 2),
-                "observed_over_full": round(warm_ratio, 4),
-                "note": "a repeated run on unchanged sources, not the requirement",
-            },
-            "passes": relative_ok or absolute_ok,
-        },
-        "machine": {
-            "platform": platform.platform(),
-            "python": platform.python_version(),
-            "cpus": os.cpu_count(),
-            "processor": platform.processor() or "unknown",
-        },
+        "seconds": seconds,
     }
+    result.update(_nfr_block(seconds))
+    result["machine"] = {
+        "platform": platform.platform(),
+        "python": platform.python_version(),
+        "cpus": os.cpu_count(),
+        "processor": platform.processor() or "unknown",
+    }
+    return result
+
+
+def run_repeated(root: str, config_path: str, repeat: int = 1) -> dict:
+    repeat = max(1, int(repeat))
+    runs = [run(root, config_path) for _ in range(repeat)]
+    if repeat == 1:
+        return runs[0]
+
+    first = runs[0]
+    for other in runs[1:]:
+        if other["findings"] != first["findings"] or other["lines"] != first["lines"]:
+            raise RuntimeError(
+                "the runs disagreed on the tree: findings %d vs %d, lines %d vs %d"
+                % (first["findings"], other["findings"], first["lines"], other["lines"])
+            )
+
+    seconds = {phase: round(_median([item["seconds"][phase] for item in runs]), 2) for phase in PHASES}
+    spread = {
+        phase: {
+            "min": round(min(item["seconds"][phase] for item in runs), 2),
+            "max": round(max(item["seconds"][phase] for item in runs), 2),
+        }
+        for phase in PHASES
+    }
+
+    result = {
+        "project": first["project"],
+        "files": first["files"],
+        "lines": first["lines"],
+        "findings": first["findings"],
+        "seconds": seconds,
+    }
+    result.update(_nfr_block(seconds))
+    result["machine"] = first["machine"]
+    result["repetitions"] = {
+        "count": repeat,
+        "protocol": "each run repeats the full / cold / warm / changed sequence on an unchanged tree",
+        "runs": [{"seconds": item["seconds"]} for item in runs],
+        "median": seconds,
+        "range": spread,
+    }
+    return result
 
 
 def render(result: dict) -> str:
@@ -155,37 +242,76 @@ def render(result: dict) -> str:
         verdict = "PASS via the absolute clause"
     else:
         verdict = "FAIL under both clauses"
-    return "\n".join(
-        [
-            "## 100k-line performance measurement",
-            "",
-            "| phase | seconds | note |",
-            "| --- | ---: | --- |",
-            "| full (no cache) | %(full).2f | detector cost, the NFR denominator |" % seconds,
-            "| cold (cache write) | %(cold_with_cache_write).2f | first run of a new tree |" % seconds,
-            "| warm (cache hit) | %(warm).2f | repeated run on unchanged sources, not the NFR |" % seconds,
-            "| changed (memo miss) | %(changed).2f | one PR line: whole-tree re-analysis, the NFR case |" % seconds,
-            "",
-            "- project: %d files, %d lines, %d findings"
-            % (result["files"], result["lines"], result["findings"]),
-            "- NFR relative clause: changed / full = %.1f %% (target <= %.0f %%) -> %s"
-            % (
-                relative["observed"] * 100,
-                relative["target"] * 100,
-                "PASS" if relative["passes"] else "FAIL",
-            ),
-            "- NFR absolute clause: changed = %.2f s (target <= %.0f s) -> %s"
-            % (
-                absolute["observed_seconds"],
-                absolute["target"],
-                "PASS" if absolute["passes"] else "FAIL",
-            ),
-            "- warm / full = %.1f %% (informational: a repeated run, not an incremental one)"
-            % (nfr["warm_repeat_run"]["observed_over_full"] * 100),
-            "- NFR verdict: **%s**" % verdict,
-            "",
-        ]
-    )
+    lines = [
+        "## 100k-line performance measurement",
+        "",
+        "| phase | seconds | note |",
+        "| --- | ---: | --- |",
+        "| full (no cache) | %(full).2f | detector cost, the NFR denominator |" % seconds,
+        "| cold (cache write) | %(cold_with_cache_write).2f | first run of a new tree |" % seconds,
+        "| warm (cache hit) | %(warm).2f | repeated run on unchanged sources, not the NFR |" % seconds,
+        "| changed (memo miss) | %(changed).2f | one PR line: whole-tree re-analysis, the NFR case |" % seconds,
+        "",
+        "- project: %d files, %d lines, %d findings"
+        % (result["files"], result["lines"], result["findings"]),
+        "- NFR relative clause: changed / full = %.1f %% (target <= %.0f %%) -> %s"
+        % (
+            relative["observed"] * 100,
+            relative["target"] * 100,
+            "PASS" if relative["passes"] else "FAIL",
+        ),
+        "- NFR absolute clause: changed = %.2f s (target <= %.0f s) -> %s"
+        % (
+            absolute["observed_seconds"],
+            absolute["target"],
+            "PASS" if absolute["passes"] else "FAIL",
+        ),
+        "- warm / full = %.1f %% (informational: a repeated run, not an incremental one)"
+        % (nfr["warm_repeat_run"]["observed_over_full"] * 100),
+        "- NFR verdict: **%s**" % verdict,
+        "",
+    ]
+
+    repetitions = result.get("repetitions")
+    if repetitions:
+        spread = repetitions["range"]
+        lines.extend(
+            [
+                "### Repetitions",
+                "",
+                "- %d runs of the whole protocol on an unchanged tree; the table above reports medians"
+                % repetitions["count"],
+                "",
+                "| phase | median s | min s | max s |",
+                "| --- | ---: | ---: | ---: |",
+            ]
+        )
+        for phase in PHASES:
+            lines.append(
+                "| %s | %.2f | %.2f | %.2f |"
+                % (phase, seconds[phase], spread[phase]["min"], spread[phase]["max"])
+            )
+        lines.append("")
+        lines.extend(
+            [
+                "| run | full s | cold s | warm s | changed s |",
+                "| --- | ---: | ---: | ---: | ---: |",
+            ]
+        )
+        for index, item in enumerate(repetitions["runs"], 1):
+            per_run = item["seconds"]
+            lines.append(
+                "| %d | %.2f | %.2f | %.2f | %.2f |"
+                % (
+                    index,
+                    per_run["full"],
+                    per_run["cold_with_cache_write"],
+                    per_run["warm"],
+                    per_run["changed"],
+                )
+            )
+        lines.append("")
+    return "\n".join(lines)
 
 
 def main(argv=None) -> int:
@@ -195,6 +321,12 @@ def main(argv=None) -> int:
     parser.add_argument("--target-lines", type=int, default=100_000)
     parser.add_argument("--json", default=None, help="write the raw numbers here")
     parser.add_argument("--no-generate", action="store_true", help="reuse an existing project")
+    parser.add_argument(
+        "--repeat",
+        type=int,
+        default=1,
+        help="repeat the whole protocol N times and report per-phase median and range",
+    )
     args = parser.parse_args(argv)
 
     if not args.no_generate:
@@ -203,7 +335,7 @@ def main(argv=None) -> int:
         counts = generate(args.root, args.target_lines)
         print("generated %d files / %d lines" % (counts["files"], counts["lines"]))
 
-    result = run(args.root, args.config)
+    result = run_repeated(args.root, args.config, args.repeat)
     print(render(result))
     if args.json:
         os.makedirs(os.path.dirname(os.path.abspath(args.json)), exist_ok=True)
