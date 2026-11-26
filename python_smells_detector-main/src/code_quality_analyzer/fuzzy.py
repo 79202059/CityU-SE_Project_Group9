@@ -17,10 +17,17 @@ pair that a reviewer can see through.
 
 Score (0..1), symbol-dominant because a rename changes the name first:
 
-    score = 0.55 * symbol + 0.30 * path + 0.15 * line
+    score = 0.40 * symbol + 0.25 * path + 0.15 * line + 0.20 * ast
 
-The weights, the 0.62 acceptance threshold and the 0.45 symbol gate are
-recorded in ADR-007 together with the data that motivated them.
+``ast`` is the normalised structural similarity of the two symbols
+(``structure.py``).  It is the evidence that lets a rename with a *dissimilar*
+name still pair: 0.90 shape similarity is accepted even when the names share
+little.  When no signature is available (module-level smells, missing files)
+the AST weight is dropped and the previous 0.55 / 0.30 / 0.15 blend is used
+unchanged, so behaviour without evidence does not move.
+
+The weights, the 0.62 acceptance threshold, the 0.45 symbol gate and the
+"strong shape may excuse a weak name" rule are recorded in ADR-009.
 """
 
 from __future__ import annotations
@@ -28,18 +35,29 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from difflib import SequenceMatcher
-from typing import Dict, List, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 from .finding import Finding
 from .fingerprint import relative_path
+from .structure import ast_ratio
 
 DEFAULT_THRESHOLD = 0.62
 MIN_SYMBOL_RATIO = 0.45
 
-W_SYMBOL = 0.55
-W_PATH = 0.30
+# A strong shape match may stand in for a weak name, but never for no name at
+# all: 0.15 still requires a shared fragment.
+AST_GATE = 0.90
+MIN_WEAK_SYMBOL = 0.15
+
+W_SYMBOL = 0.40
+W_PATH = 0.25
 W_LINE = 0.15
+W_AST = 0.20
 LINE_SCALE = 200.0
+
+# Blend used when no AST signature exists; kept at the ADR-007 values so
+# behaviour is identical when the only change is the absence of evidence.
+NO_AST_WEIGHTS = {"symbol": 0.55, "path": 0.30, "line": 0.15}
 
 # Transformations recorded in the evidence, so a report can say what happened.
 RENAMED = "renamed"
@@ -125,7 +143,7 @@ def line_ratio(base: Finding, head: Finding) -> float:
 def pair_score(
     base: Finding, head: Finding, base_root: str, head_root: str
 ) -> Tuple[float, Dict[str, float]]:
-    """Blend the three signals into one 0..1 score plus its parts."""
+    """Blend the signals into one 0..1 score plus its parts."""
     base_path = relative_path(base.file_path, base_root)
     head_path = relative_path(head.file_path, head_root)
     parts = {
@@ -133,8 +151,32 @@ def pair_score(
         "path": path_ratio(base_path, head_path),
         "line": line_ratio(base, head),
     }
-    score = W_SYMBOL * parts["symbol"] + W_PATH * parts["path"] + W_LINE * parts["line"]
+    shape = ast_ratio(base, head)
+    if shape is None:
+        score = sum(NO_AST_WEIGHTS[key] * parts[key] for key in NO_AST_WEIGHTS)
+        return score, parts
+    parts["ast"] = shape
+    score = (
+        W_SYMBOL * parts["symbol"]
+        + W_PATH * parts["path"]
+        + W_LINE * parts["line"]
+        + W_AST * shape
+    )
     return score, parts
+
+
+def _passes_name_gate(
+    parts: Dict[str, float], min_symbol_ratio: float, min_ast_ratio: float
+) -> bool:
+    """A similar name is enough; otherwise the shape has to carry the pair."""
+    if parts["symbol"] >= min_symbol_ratio:
+        return True
+    shape: Optional[float] = parts.get("ast")
+    return (
+        shape is not None
+        and shape >= min_ast_ratio
+        and parts["symbol"] >= MIN_WEAK_SYMBOL
+    )
 
 
 def _transformation(base_path: str, head_path: str, base: Finding, head: Finding) -> str:
@@ -155,6 +197,7 @@ def match(
     *,
     threshold: float = DEFAULT_THRESHOLD,
     min_symbol_ratio: float = MIN_SYMBOL_RATIO,
+    min_ast_ratio: float = AST_GATE,
 ) -> List[FuzzyMatch]:
     """Pair leftovers one-to-one, best score first.
 
@@ -168,7 +211,9 @@ def match(
             if base.smell_type != head.smell_type:
                 continue
             score, parts = pair_score(base, head, base_root, head_root)
-            if score < threshold or parts["symbol"] < min_symbol_ratio:
+            if score < threshold or not _passes_name_gate(
+                parts, min_symbol_ratio, min_ast_ratio
+            ):
                 continue
             base_path = relative_path(base.file_path, base_root)
             head_path = relative_path(head.file_path, head_root)

@@ -155,7 +155,9 @@ class TestLineRatio:
 
 class TestPairScore:
     def test_weights_sum_to_one(self):
-        assert fuzzy.W_SYMBOL + fuzzy.W_PATH + fuzzy.W_LINE == pytest.approx(1.0)
+        total = fuzzy.W_SYMBOL + fuzzy.W_PATH + fuzzy.W_LINE + fuzzy.W_AST
+        assert total == pytest.approx(1.0)
+        assert fuzzy.W_AST == pytest.approx(0.20)
 
     def test_identical_findings_score_one(self):
         score, parts = pair_score(_base(), _head(), BASE_ROOT, HEAD_ROOT)

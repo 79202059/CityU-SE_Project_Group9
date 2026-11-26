@@ -23,16 +23,39 @@ worse. We therefore need an identity that is (a) deterministic, (b) insensitive 
 
 Use a **two-stage identity**:
 
-1. **Exact stage** — fingerprint = `rule_id | normalised relative POSIX path | qualified symbol |
-   normalised AST signature`. Line numbers are forbidden. A match on all four components is
-   `UNCHANGED` (or `WORSENED` if the metric worsened).
+1. **Exact stage** — fingerprint = `rule_id | normalised relative POSIX path | qualified symbol`.
+   Line numbers are forbidden. A match on all three components is `UNCHANGED` (or `WORSENED`
+   if the metric worsened).
 2. **Fuzzy stage** — for leftovers, generate candidates and score them on symbol similarity
-   (normalised edit distance), path similarity, AST similarity, line proximity and metric range.
+   (normalised edit distance), path similarity, AST shape similarity and line proximity.
    Accept at ≥ 0.62 by default. The threshold is configurable (`--fuzzy-threshold`) and the stage
    can be disabled (`--no-fuzzy`) as an escape hatch.
 3. **Worsening is a separate question** — a matched finding is `WORSENED` only when its measured
    value crosses the effective threshold in head, or worsens by > 20% while already above it.
    `--no-worsen` collapses matched findings to `UNCHANGED`.
+
+### Why the AST signature is *not* in the exact fingerprint
+
+The first draft put the normalised AST signature in the exact key (as §4.2 of the project overview
+originally described). That is self-contradictory: the edit that makes a smell `WORSENED` — adding
+statements to the method — also changes its AST signature, so a worsened finding would never match
+exactly and would be reported as `NEW`. `WORSENED` is defined as “same identity, larger metric”, so
+identity must survive the body edit. The signature therefore enters as **similarity evidence in the
+fuzzy stage**, where a partial match is allowed by design. `fingerprint.py` keeps the exact key at
+`(smell_type, path, symbol)` and `structure.py` owns the signature.
+
+Weights in the fuzzy stage (sum 1.0):
+
+```text
+score = 0.40 * symbol + 0.25 * path + 0.15 * line + 0.20 * ast
+```
+
+Gates: the symbol must reach 0.45, **unless** the AST shape reaches 0.90 and the name still shares
+a fragment (≥ 0.15). That exception is what pairs a rename whose name changed completely
+(`compute_total` → `tally`) while refusing two same-shaped but unrelated functions. When no
+signature is available (module-level smells such as Cyclic Dependency, missing files, unparsable
+files) the AST weight is dropped and the previous `0.55 / 0.30 / 0.15` blend is used unchanged, so
+absence of evidence never changes the verdict.
 
 Every match carries the score components in the explanation, so a reviewer can see *why* two
 findings were paired.
@@ -54,9 +77,11 @@ findings were paired.
 ## Consequences
 
 - **Positive:** deterministic, testable identity; all state transitions are explainable in one
-  sentence; cosmetic edits produce no noise (verified on 40 move/rename fixtures).
+  sentence; cosmetic edits produce no noise (verified on 40 move/rename fixtures); a rename whose
+  name changed completely still pairs when the body shape is intact (added 2026-11-26).
 - **Neutral:** the AST signature is version-sensitive by nature; normalisation rules are pinned by
-  golden tests, not by the interpreter's `ast.dump` formatting luck.
+  golden tests, not by the interpreter's `ast.dump` formatting luck. Shape similarity is an
+  evidence signal, never an exact key, for the `WORSENED` reason above.
 - **Negative / accepted limitations:** cross-repository moves are unsupported; a function split
   into two is reported as one `RESOLVED` plus one `NEW` (documented as risk R3-adjacent); deeply
   dynamic code may not produce a stable signature.
@@ -66,5 +91,8 @@ findings were paired.
 1. `tests/test_fingerprint.py` — line shifts, renames, docstring-only edits, file moves.
 2. `tests/test_fuzzy.py` — 40 move/rename fixtures, including negative cases (unrelated function
    next to the old line must not match).
-3. Mutation corpus replay (`eval-corpus-v1`) — lifecycle accuracy per focal smell.
-4. Real-world sample — new-smell precision/recall against two annotators; Cohen's κ reported.
+3. `tests/test_structure.py` — normalised shape: rename keeps 1.0, docstring ≥ 0.85, module-level
+   symbols have no signature, dissimilar rename pairs, different shape does not, exact key ignores
+   the body (so `WORSENED` survives).
+4. Mutation corpus replay (`eval-corpus-v1`) — lifecycle accuracy per focal smell.
+5. Real-world sample — new-smell precision/recall against two annotators; Cohen's κ reported.
