@@ -40,6 +40,8 @@ def baseline_payload(
     *,
     tool_version: str,
     ref: Optional[str] = None,
+    long_methods: Optional[dict] = None,
+    large_classes: Optional[dict] = None,
 ) -> dict:
     """Build the JSON-serialisable baseline document for ``findings``."""
     records = []
@@ -72,6 +74,10 @@ def baseline_payload(
     }
     if ref:
         payload["ref"] = ref
+    if long_methods is not None:
+        payload["long_methods"] = long_methods
+    if large_classes is not None:
+        payload["large_classes"] = large_classes
     return payload
 
 
@@ -135,6 +141,7 @@ def diff_against_baseline(
     *,
     worsen: Optional[WorsenJudge] = None,
     worsen_details: Optional[Dict[str, dict]] = None,
+    crossings: Optional[Dict[str, dict]] = None,
     fuzzy: Optional[object] = None,
     fuzzy_details: Optional[Dict[str, dict]] = None,
 ) -> Dict[str, List[Finding]]:
@@ -161,18 +168,21 @@ def diff_against_baseline(
         key = fingerprint(finding, head_root)
         seen.add(key)
         record = baseline_index.get(key)
-        if record is None:
-            new.append(finding)
-            continue
         evidence = None
-        if worsen is not None:
+        if record is None:
+            if worsen and crossings:
+                evidence = crossings.get(fingerprint_string(finding, head_root))
+            if evidence is None:
+                new.append(finding)
+                continue
+        elif worsen is not None:
             evidence = worsen(finding_from_record(record, head_root), finding)
         if evidence is None:
             unchanged.append(finding)
         else:
             worsened.append(finding)
             if worsen_details is not None:
-                worsen_details[key] = evidence
+                worsen_details[fingerprint_string(finding, head_root)] = evidence
 
     resolved = [
         finding_from_record(record, head_root)
@@ -197,7 +207,7 @@ def diff_against_baseline(
             else:
                 worsened.append(pair.head)
                 if worsen_details is not None:
-                    worsen_details[fingerprint(pair.head, head_root)] = evidence
+                    worsen_details[fingerprint_string(pair.head, head_root)] = evidence
             if fuzzy_details is not None:
                 detail = pair.as_dict() if hasattr(pair, "as_dict") else {}
                 fuzzy_details[fingerprint_string(pair.head, head_root)] = detail

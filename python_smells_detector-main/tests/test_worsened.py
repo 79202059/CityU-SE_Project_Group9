@@ -29,7 +29,7 @@ from code_quality_analyzer.fingerprint import (
     classify_lifecycle,
     fingerprint_string,
 )
-from code_quality_analyzer.metrics import WORSEN_MIN_DELTA, WORSEN_RELATIVE, worsen_detail
+from code_quality_analyzer.metrics import WORSEN_RELATIVE, worsen_detail
 from code_quality_analyzer.sarif_builder import build_sarif, fingerprint
 
 BASE_ROOT = "/base"
@@ -86,7 +86,7 @@ class TestMetricTableOwnership(unittest.TestCase):
 
 
 class TestWorsenDetail(unittest.TestCase):
-    def test_metric_growth_past_the_floor_is_worse(self):
+    def test_metric_growth_above_twenty_percent_is_worse(self):
         detail = worsen_detail(_base_of(_finding(metric_value=45)), _finding(metric_value=60))
         self.assertIsNotNone(detail)
         self.assertEqual(detail["reason"], "metric")
@@ -96,9 +96,34 @@ class TestWorsenDetail(unittest.TestCase):
         self.assertEqual(detail["metric"], "LONG_METHOD_LINES")
 
     def test_one_line_growth_is_not_news(self):
-        # 46 -> 47 is the classic false positive: noise, not degradation.
+        # The increase is well below the frozen contract's 20% threshold.
         self.assertIsNone(
             worsen_detail(_base_of(_finding(metric_value=46)), _finding(metric_value=47))
+        )
+
+    def test_exactly_twenty_percent_growth_is_not_worse(self):
+        self.assertIsNone(
+            worsen_detail(_base_of(_finding(metric_value=50)), _finding(metric_value=60))
+        )
+        self.assertIsNone(
+            worsen_detail(_base_of(_finding(metric_value=9.5)), _finding(metric_value=11.4))
+        )
+
+    def test_growth_just_above_twenty_percent_is_worse(self):
+        detail = worsen_detail(
+            _base_of(_finding(metric_value=50)), _finding(metric_value=61)
+        )
+        self.assertIsNotNone(detail)
+        self.assertEqual(detail["delta"], 11)
+
+    def test_zero_base_metric_has_no_percentage_growth(self):
+        self.assertIsNone(
+            worsen_detail(_base_of(_finding(metric_value=0)), _finding(metric_value=1))
+        )
+
+    def test_negative_base_metric_has_no_percentage_growth(self):
+        self.assertIsNone(
+            worsen_detail(_base_of(_finding(metric_value=-10)), _finding(metric_value=5))
         )
 
     def test_flat_metric_is_not_worse(self):
@@ -112,19 +137,19 @@ class TestWorsenDetail(unittest.TestCase):
         )
 
     def test_relative_threshold_scales_for_large_values(self):
-        # 194 -> 200 is +3%, below the 5% relative floor for LCOM-sized numbers.
+        # 194 -> 232 is just below 20%; 194 -> 233 is above it.
         self.assertIsNone(
             worsen_detail(
                 _base_of(_finding(smell_type="LCOM", metric_value=194)),
-                _finding(smell_type="LCOM", metric_value=200),
+                _finding(smell_type="LCOM", metric_value=232),
             )
         )
         detail = worsen_detail(
             _base_of(_finding(smell_type="LCOM", metric_value=194)),
-            _finding(smell_type="LCOM", metric_value=260),
+            _finding(smell_type="LCOM", metric_value=233),
         )
         self.assertIsNotNone(detail)
-        self.assertEqual(detail["delta"], 66)
+        self.assertEqual(detail["delta"], 39)
 
     def test_severity_fallback_when_no_metric_exists(self):
         detail = worsen_detail(
@@ -146,12 +171,11 @@ class TestWorsenDetail(unittest.TestCase):
 
     def test_thresholds_are_overridable(self):
         base = _base_of(_finding(metric_value=10))
-        self.assertIsNone(worsen_detail(base, _finding(metric_value=12), min_delta=5))
-        self.assertIsNotNone(worsen_detail(base, _finding(metric_value=12), min_delta=1))
+        self.assertIsNone(worsen_detail(base, _finding(metric_value=14), relative=0.50))
+        self.assertIsNotNone(worsen_detail(base, _finding(metric_value=14), relative=0.30))
 
     def test_defaults_are_pinned(self):
-        self.assertEqual(WORSEN_MIN_DELTA, 1.0)
-        self.assertEqual(WORSEN_RELATIVE, 0.05)
+        self.assertEqual(WORSEN_RELATIVE, 0.20)
 
 
 class TestClassifyWorsened(unittest.TestCase):

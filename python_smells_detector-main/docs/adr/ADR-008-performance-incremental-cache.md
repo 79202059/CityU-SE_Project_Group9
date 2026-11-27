@@ -91,3 +91,6 @@ NFR met: warm is 1.4% of full and 0.36 s absolute (targets: <= 40% or <= 30 s).
 The `changed` phase confirms the negative consequence recorded above - a PR
 touching one file pays the full-analysis cost because the memo key covers the
 whole tree. Details and caveats: `docs/benchmarks/performance-100k.md`.
+## Candidate measurement with Large Class observations
+
+The latest local three-run measurement missed both clauses on a changed generated tree. Whole-tree cache hits preserve detector context, including class and function measurements for threshold comparisons. See the [evidence index](../nfr-evidence.md) for the measured timings, host and formal acceptance inputs.

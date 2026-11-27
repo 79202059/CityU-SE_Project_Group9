@@ -42,7 +42,7 @@ from typing import Dict, List, Optional, Tuple
 from .finding import Finding
 from .fingerprint import relative_path
 
-CACHE_SCHEMA_VERSION = 1
+CACHE_SCHEMA_VERSION = 3
 DEFAULT_CACHE_DIRNAME = ".pyexamine-cache"
 
 # Effective-threshold sections that change detector output.  The cache must
@@ -149,7 +149,7 @@ class AnalysisCache:
     def _entry_path(self, key: str) -> str:
         return os.path.join(self.cache_dir, key + ".json")
 
-    def load(self, key: str, tree_root: str) -> Optional[Tuple[List[Finding], Dict[str, int]]]:
+    def load(self, key: str, tree_root: str, *, context=None) -> Optional[Tuple[List[Finding], Dict[str, int]]]:
         """Cached findings re-rooted onto ``tree_root``, or ``None`` on a miss."""
         path = self._entry_path(key)
         if not os.path.isfile(path):
@@ -166,6 +166,9 @@ class AnalysisCache:
             for record in payload.get("findings", [])
         ]
         fan_in = payload.get("fan_in") or {}
+        if context is not None:
+            context["long_methods"] = payload.get("long_methods") or {}
+            context["large_classes"] = payload.get("large_classes") or {}
         return findings, fan_in
 
     def store(
@@ -174,6 +177,9 @@ class AnalysisCache:
         findings: List[Finding],
         fan_in: Dict[str, int],
         tree_root: str,
+        *,
+        long_methods=None,
+        large_classes=None,
     ) -> None:
         """Write an entry atomically (LF endings, UTF-8)."""
         payload = {
@@ -181,6 +187,8 @@ class AnalysisCache:
             "key": key,
             "findings": [_finding_to_record(finding, tree_root) for finding in findings],
             "fan_in": fan_in,
+            "long_methods": long_methods or {},
+            "large_classes": large_classes or {},
         }
         directory = os.path.dirname(os.path.abspath(self._entry_path(key)))
         if directory:

@@ -27,7 +27,7 @@ one-to-one, so a find-and-replace is enough.
 | US-16 | FR8 | 3 | #16 | #41 | `delta.py`, `risk.py` | `test_delta_cli.py` | Done |
 | US-17 | FR8 | 3 | #17 | #42 | `.github/workflows/` | manual + docs | Done |
 | US-18 | NFR1 (performance) | 3 | #18 | #43 | `cache.py` | `test_cache.py` | Done |
-| US-19 | Evaluation | 3 | #19 | #44 | `eval/`, report | evaluation scripts | In progress |
+| US-19 | Evaluation | 3 | #19 | #44 | `eval/`, report | [Detailed export and independent scoring](../python_smells_detector-main/docs/evaluation-baselines.md) | In progress. Frozen inputs and contract-host measurement outstanding. |
 
 ## 2. Functional requirement coverage
 
@@ -46,8 +46,8 @@ one-to-one, so a find-and-replace is enough.
 
 | NFR | Target | Architectural option | Stories | ADR | Verification |
 | --- | --- | --- | --- | --- | --- |
-| NFR1 Performance | Warm run ≤ 40% of full, or ≤ 30 s on 100k LOC | Content-addressed whole-tree memo | US-18 | ADR-008 | `test_cache.py` + measurement protocol |
-| NFR2 Reliability | F1 ≥ 0.85; no false NEW after cosmetic moves | Staged exact + fuzzy identity; frozen corpus | US-02, US-04, US-06, US-08, US-09 | ADR-009 | `test_fingerprint.py`, `test_fuzzy.py`, evaluation |
+| NFR1 Performance (primary) | Changed tree ≤ 40% of full, or ≤ 30 s on 100k LOC | Whole-tree reuse preserves cross-file detector state | US-18, US-19 | [ADR-008](../python_smells_detector-main/docs/adr/ADR-008-performance-incremental-cache.md) | [Measured timings and environment](../python_smells_detector-main/docs/nfr-evidence.md) |
+| NFR2 Reliability (primary) | F1 ≥ 0.85 and cosmetic moves tracked correctly | Stable exact identity survives edits. Fuzzy evidence recovers moved symbols. | US-02, US-04, US-06, US-08, US-09, US-19 | [ADR-009](adr/ADR-009-reliability-staged-matching.md) | [Scoring and outstanding ground truth](../python_smells_detector-main/docs/evaluation-baselines.md) |
 | NFR3 Extensibility | New detector without touching the comparison engine | Detector Adapter + unified Finding + rule registry | US-01, US-08, US-14 | ADR-010 | `rule_registry.py`, `test_rule_coverage.py` |
 | NFR4 Usability | Install → run → interpret in 5 minutes | Single-command CLI, four formats, explanations | US-13, US-15, US-17 | ADR-011 | quick-start walkthrough, demo script |
 

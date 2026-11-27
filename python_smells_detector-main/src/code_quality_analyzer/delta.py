@@ -58,7 +58,7 @@ from .fingerprint import (
 )
 from .fuzzy import match as fuzzy_match
 from .main import _version, resolve_config_path
-from .metrics import enrich_metrics, worsen_detail
+from .metrics import enrich_metrics, measured_crossings, worsen_detail
 from .risk import (
     RiskScore,
     changed_lines,
@@ -83,6 +83,14 @@ EXIT_GATE_REACHED = 1
 EXIT_USAGE = 2
 
 _SEVERITY_RANK = {"low": 0, "medium": 1, "high": 2}
+_MACHINE_FORMATS = {"json", "sarif"}
+
+
+def _status_stream(args: argparse.Namespace):
+    """Keep machine-readable stdout free of status and error messages."""
+    if not getattr(args, "output", None) and getattr(args, "format", "text") in _MACHINE_FORMATS:
+        return sys.stderr
+    return sys.stdout
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -161,16 +169,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--risk",
         action="store_true",
-        help="Attach an explainable 0-100 risk score to every finding and rank "
-             "the report by it (see risk.py for the four components)",
+        help="Attach an explainable 0-100 risk score to NEW and WORSENED findings "
+             "and rank the report by it",
     )
     parser.add_argument(
         "--min-risk",
         type=float,
         default=None,
         metavar="SCORE",
-        help="Only NEW findings at or above SCORE (0-100) can satisfy --fail-on-new "
-             "or trigger the gate; implies --risk",
+        help="Only gate-eligible findings at or above SCORE (0-100) satisfy "
+             "--fail-on-new; implies --risk",
     )
     parser.add_argument(
         "--max-new",
@@ -257,15 +265,17 @@ def analyze_tree(
 
     _manifest, manifest_digest = tree_manifest(tree_path, ignore)
     key = cache.key_for(config_handler, manifest_digest, _version())
-    hit = cache.load(key, tree_path)
+    hit = cache.load(key, tree_path, context=context)
     if hit is not None:
         findings, fan_in = hit
         if context is not None:
             context["fan_in"] = fan_in
         return findings
 
-    findings = _analyze_tree_uncached(tree_path, config_handler, ignore, context)
-    cache.store(key, findings, (context or {}).get("fan_in") or {}, tree_path)
+    stored_context = context if context is not None else {}
+    findings = _analyze_tree_uncached(tree_path, config_handler, ignore, stored_context)
+    cache.store(key, findings, stored_context.get("fan_in") or {}, tree_path,
+                long_methods=stored_context["long_methods"], large_classes=stored_context["large_classes"])
     return findings
 
 
@@ -278,7 +288,10 @@ def _analyze_tree_uncached(
     """Detector pass without cache lookup; returns enriched findings."""
     findings: List[Finding] = []
 
-    code_detector = CodeSmellDetector(config_handler.get_thresholds("code_smells"))
+    thresholds = config_handler.get_thresholds("code_smells")
+    lengths = {} if context is not None else None
+    classes = {} if context is not None else None
+    code_detector = CodeSmellDetector(thresholds, method_lengths=lengths, class_sizes=classes)
     for root, dirs, files in os.walk(tree_path):
         dirs[:] = [d for d in dirs if d not in ignore]
         for file in files:
@@ -294,6 +307,16 @@ def _analyze_tree_uncached(
     except Exception:  # noqa: BLE001 - cross-file is best-effort
         logger.debug("Cross-file code smell detection failed", exc_info=True)
     findings.extend(Finding.from_smell(s, CATEGORY_CODE) for s in code_detector.code_smells)
+    if context is not None:
+        context["long_methods"] = {
+            "threshold": thresholds.get("LONG_METHOD_LINES"),
+            "files": {relative_path(path, tree_path): methods for path, methods in lengths.items()
+                      if methods},
+        }
+        context["large_classes"] = {
+            "threshold": thresholds.get("LARGE_CLASS_METHODS"),
+            "files": {relative_path(path, tree_path): sizes for path, sizes in classes.items() if sizes},
+        }
 
     structural_detector = StructuralSmellDetector(
         config_handler.get_thresholds("structural_smells"))
@@ -712,6 +735,7 @@ def _resolve_baseline_path(args: argparse.Namespace, project: str) -> str:
 
 
 def run(args: argparse.Namespace) -> int:
+    status_stream = _status_stream(args)
     project = os.path.abspath(args.project)
     if not os.path.isdir(project):
         raise FileNotFoundError(
@@ -759,103 +783,83 @@ def run(args: argparse.Namespace) -> int:
         )
 
     with VersionProvider(repo_root) as provider:
-        if args.baseline_mode in ("diff", "write"):
-            head_tree = provider.materialize(args.head)
-            logger.info("Analyzing head revision %s ...", args.head)
-            head_findings = analyze_tree(
-                head_tree, config_handler, args.ignore, context=context, cache=cache
+        head_tree = provider.materialize(args.head)
+        head_findings = analyze_tree(
+            head_tree, config_handler, args.ignore, context=context, cache=cache
+        )
+        if args.baseline_mode == "write":
+            payload = baseline_payload(
+                head_findings, head_tree, tool_version=tool_version, ref=args.head,
+                long_methods=context["long_methods"],
+                large_classes=context["large_classes"],
             )
-            if args.baseline_mode == "write":
-                payload = baseline_payload(
-                    head_findings, head_tree, tool_version=tool_version, ref=args.head
-                )
-                write_baseline(baseline_path, payload)
-                print(
-                    "Baseline written to %s (%d findings)"
-                    % (baseline_path, payload["counts"]["total"])
-                )
-                classified = {
-                    NEW: [],
-                    WORSENED: [],
-                    UNCHANGED: head_findings,
-                    RESOLVED: [],
-                }
-            elif baseline_doc is not None:
-                classified = diff_against_baseline(
-                    baseline_doc,
-                    head_findings,
-                    head_tree,
-                    worsen=worsen,
-                    worsen_details=worsen_details,
-                    fuzzy=fuzzy,
-                    fuzzy_details=fuzzy_details,
+            write_baseline(baseline_path, payload)
+            print(
+                "Baseline written to %s (%d findings)" % (baseline_path, payload["counts"]["total"]),
+                file=status_stream,
+            )
+            classified = {NEW: [], WORSENED: [], UNCHANGED: head_findings, RESOLVED: []}
+        else:
+            base_context = {}
+            if baseline_doc is None:
+                base_tree = provider.materialize(args.base)
+                base_findings = analyze_tree(
+                    base_tree, config_handler, args.ignore, context=base_context, cache=cache
                 )
             else:
-                base_tree = provider.materialize(args.base)
-                base_findings = analyze_tree(base_tree, config_handler, args.ignore, cache=cache)
-                classified = classify_lifecycle(
-                    base_findings,
-                    head_findings,
-                    base_tree,
-                    head_tree,
-                    worsen=worsen,
-                    worsen_details=worsen_details,
-                    fuzzy=fuzzy,
-                    fuzzy_details=fuzzy_details,
-                )
-        else:
-            base_tree = provider.materialize(args.base)
-            head_tree = provider.materialize(args.head)
-            logger.info("Analyzing base revision %s ...", args.base)
-            base_findings = analyze_tree(base_tree, config_handler, args.ignore, cache=cache)
-            logger.info("Analyzing head revision %s ...", args.head)
-            head_findings = analyze_tree(
-                head_tree, config_handler, args.ignore, context=context, cache=cache
-            )
-            classified = classify_lifecycle(
-                base_findings,
-                head_findings,
-                base_tree,
-                head_tree,
-                worsen=worsen,
-                worsen_details=worsen_details,
-                fuzzy=fuzzy,
-                fuzzy_details=fuzzy_details,
-            )
+                base_context = baseline_doc
+            options = {
+                "worsen": worsen, "worsen_details": worsen_details,
+                "fuzzy": fuzzy, "fuzzy_details": fuzzy_details,
+            }
+            if worsen:
+                options["crossings"] = measured_crossings(base_context, context, head_findings, head_tree)
+            if baseline_doc is None:
+                classified = classify_lifecycle(base_findings, head_findings, base_tree, head_tree, **options)
+            else:
+                classified = diff_against_baseline(baseline_doc, head_findings, head_tree, **options)
 
-    gate_candidates = list(classified[NEW])
-    if args.fail_on_worsened:
-        gate_candidates.extend(classified.get(WORSENED, []))
+    new = list(classified[NEW])
+    worsened = list(classified.get(WORSENED, []))
+    review_candidates = new + worsened
+    gate_candidates = review_candidates if args.fail_on_worsened else new
 
     risks: Optional[Dict[str, RiskScore]] = None
-    if (args.risk or args.min_risk is not None) and gate_candidates:
+    if (args.risk or args.min_risk is not None) and review_candidates:
         thresholds = {
             section: config_handler.get_thresholds(section)
             for section in ("code_smells", "structural_smells", "architectural_smells")
         }
         hunks = changed_lines(repo_root, args.base, args.head)
-        risks = score_findings(
-            gate_candidates,
-            thresholds=thresholds,
-            tree_root=head_tree,
-            hunks=hunks,
-            fan_in=context.get("fan_in") or {},
-            fingerprint_of=lambda finding: fingerprint(finding, head_tree),
-        )
-        if args.min_risk is not None:
-            def key_of(finding):
-                return fingerprint(finding, head_tree)
 
-            ranked = rank_findings(gate_candidates, risks, key_of)
-            highest = risks[key_of(ranked[0])].score if ranked else 0.0
-            eligible = gate_by_risk(
-                gate_candidates, risks, key_of, float(args.min_risk)
-            )
-            print(
-                "risk: scored %d candidate finding(s); highest %.1f; "
-                "%d at or above %.1f"
-                % (len(risks), highest, len(eligible), float(args.min_risk))
-            )
+        def fingerprint_of(finding):
+            return fingerprint(finding, head_tree)
+
+        score_options = {
+            "thresholds": thresholds,
+            "tree_root": head_tree,
+            "hunks": hunks,
+            "fan_in": context.get("fan_in") or {},
+            "fingerprint_of": fingerprint_of,
+        }
+        risks = score_findings(review_candidates, **score_options)
+        if new and worsened and not args.fail_on_worsened:
+            # Adding WORSENED findings to the report must not change NEW scores
+            # or the existing NEW-only --min-risk gate.
+            risks.update(score_findings(new, **score_options))
+        if args.min_risk is not None:
+            if gate_candidates:
+                ranked = rank_findings(gate_candidates, risks, fingerprint_of)
+                highest = risks[fingerprint_of(ranked[0])].score
+                eligible = gate_by_risk(
+                    gate_candidates, risks, fingerprint_of, float(args.min_risk)
+                )
+                print(
+                    "risk: scored %d candidate finding(s); highest %.1f; "
+                    "%d at or above %.1f"
+                    % (len(gate_candidates), highest, len(eligible), float(args.min_risk)),
+                    file=status_stream,
+                )
 
     base_for_render = base_tree or head_tree
     if args.output:
@@ -888,8 +892,8 @@ def run(args: argparse.Namespace) -> int:
                     fuzzy_details,
                 )
             )
-        print(f"Text report written to {txt_path}")
-        print(f"JSON report written to {json_path}")
+        print(f"Text report written to {txt_path}", file=status_stream)
+        print(f"JSON report written to {json_path}", file=status_stream)
     elif args.format == "json":
         print(
             render_json(
@@ -957,8 +961,13 @@ def run(args: argparse.Namespace) -> int:
             )
         if violations:
             print(
-                "gate: %d new/worsened finding(s) at or above '%s' - failing the run"
-                % (len(violations), args.fail_on_new)
+                "gate: %d %s finding(s) at or above '%s' - failing the run"
+                % (
+                    len(violations),
+                    "new/worsened" if args.fail_on_worsened else "new",
+                    args.fail_on_new,
+                ),
+                file=status_stream,
             )
             return EXIT_GATE_REACHED
 
@@ -967,8 +976,13 @@ def run(args: argparse.Namespace) -> int:
         budget_count += len(classified.get(WORSENED, []))
     if args.max_new is not None and budget_count > args.max_new:
         print(
-            "budget: %d new/worsened finding(s) exceed the budget of %d - failing the run"
-            % (budget_count, args.max_new)
+            "budget: %d %s finding(s) exceed the budget of %d - failing the run"
+            % (
+                budget_count,
+                "new/worsened" if args.fail_on_worsened else "new",
+                args.max_new,
+            ),
+            file=status_stream,
         )
         return EXIT_GATE_REACHED
 
@@ -986,11 +1000,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         return run(args)
     except (FileNotFoundError, ValueError) as exc:
         logger.error("pyexamine-delta failed: %s", exc)
-        print(f"error: {exc}")
+        print(f"error: {exc}", file=_status_stream(args))
         return EXIT_USAGE
     except (VersionProviderError, CodeAnalysisError) as exc:
         logger.error("pyexamine-delta failed: %s", exc)
-        print(f"error: {exc}")
+        print(f"error: {exc}", file=_status_stream(args))
         return EXIT_GATE_REACHED
 
 

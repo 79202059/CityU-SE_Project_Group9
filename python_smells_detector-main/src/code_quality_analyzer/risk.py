@@ -55,6 +55,7 @@ The score is a *ranking*, not a probability.  It never suppresses a finding:
 
 from __future__ import annotations
 
+import ast
 import math
 import re
 import subprocess
@@ -270,9 +271,17 @@ def parse_diff_hunks(diff_text: str) -> Dict[str, List[Tuple[int, int]]]:
     """Map repository-relative path -> inclusive line ranges added in head."""
     ranges: Dict[str, List[Tuple[int, int]]] = {}
     current: Optional[str] = None
+    in_hunk = False
     for raw in diff_text.splitlines():
-        if raw.startswith("+++ "):
+        if raw.startswith("diff --git "):
+            current = None
+            in_hunk = False
+        if not in_hunk and raw.startswith("+++ "):
             target = raw[4:].strip()
+            if target.startswith('"'):
+                # With core.quotePath=true Git quotes bytes outside ASCII in octal.
+                # Decode the C string before comparing the path to a Finding.
+                target = ast.literal_eval("b" + target).decode("utf-8", errors="surrogateescape")
             if target == "/dev/null":
                 current = None
                 continue
@@ -285,6 +294,7 @@ def parse_diff_hunks(diff_text: str) -> Dict[str, List[Tuple[int, int]]]:
             match = _HUNK.match(raw)
             if match is None or current is None:
                 continue
+            in_hunk = True
             start = int(match.group(1))
             count = 1 if match.group(2) is None else int(match.group(2))
             if count <= 0:
@@ -298,18 +308,22 @@ def changed_lines(
     base_ref: str,
     head_ref: str,
     timeout: int = 120,
+    *,
+    strict: bool = False,
 ) -> Dict[str, List[Tuple[int, int]]]:
     """Added/modified line ranges between two refs; empty dict when git fails.
 
-    A failure is not fatal: risk ranking then simply has no change signal, and
-    the report marks every ``change`` component as unmeasured by scoring 0.
+    Risk ranking can proceed without a change signal. Evaluation callers use
+    ``strict=True`` to distinguish an unavailable diff from a valid empty diff.
     """
     command = [
         "git",
         "-C",
         repo_root,
+        "-c", "core.quotePath=true",
         "diff",
         "-U0",
+        "--src-prefix=a/", "--dst-prefix=b/",
         "--no-color",
         "--no-ext-diff",
         base_ref,
@@ -325,10 +339,12 @@ def changed_lines(
             encoding="utf-8",
             errors="replace",
             timeout=timeout,
+            check=True,
         )
-    except (OSError, subprocess.SubprocessError):
-        return {}
-    if completed.returncode != 0:
+    except (OSError, subprocess.SubprocessError) as exc:
+        if strict:
+            diagnostic = getattr(exc, "stderr", None) or str(exc)
+            raise OSError(f"Could not read git diff: {diagnostic.strip()}") from exc
         return {}
     return parse_diff_hunks(completed.stdout)
 

@@ -15,18 +15,17 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, replace
+from decimal import Decimal
 from typing import Dict, Iterable, List, Optional, Tuple
 
 from .finding import Finding
+from .fingerprint import fingerprint_string, relative_path
 from .rule_registry import rule_for
 
-# A finding is WORSENED only if the number grew by at least this much.  One
-# unit is the smallest change a reviewer would call a change; anything smaller
-# is measurement jitter, not a regression.
-WORSEN_MIN_DELTA = 1.0
-# ... and at least this fraction of the base value, so large metrics are not
-# flagged for a rounding-level increase.
-WORSEN_RELATIVE = 0.05
+# The frozen evaluation contract calls a matched finding WORSENED when its
+# measured metric grows by more than 20% from a positive base value.
+WORSEN_RELATIVE = 0.20
+WORSEN_MIN_DELTA = 1.0  # Retained for callers that explicitly request the former absolute floor.
 SEVERITY_RANK = {"low": 0, "medium": 1, "high": 2}
 
 @dataclass(frozen=True)
@@ -201,15 +200,16 @@ def worsen_detail(
     base: Finding,
     head: Finding,
     *,
-    min_delta: float = WORSEN_MIN_DELTA,
+    min_delta: float = 0.0,
     relative: float = WORSEN_RELATIVE,
 ) -> Optional[dict]:
     """Decide whether ``head`` is worse than ``base`` for the same fingerprint.
 
-    The metric is the primary evidence: a Long Method that grew from 46 to 47
-    lines is *not* news, so the required increase is ``max(min_delta,
-    relative * base)`` — at least one unit, and at least 5% for large values
-    (an LCOM going 194 -> 200 is noise, 194 -> 260 is not).
+    The metric is the primary evidence. A matched finding is WORSENED only
+    when ``(head - base) / base > relative``. The strict comparison follows
+    the frozen evaluation contract's ``> 20%`` boundary. A zero or negative
+    base metric has no meaningful percentage-growth denominator and is not
+    classified as WORSENED by metric evidence.
 
     Severity is only a fallback for findings whose detector reports no number
     (``Dead Code``, ``Orphan Module``...).  It is weaker evidence because
@@ -219,9 +219,11 @@ def worsen_detail(
     base_value = base.metric_value
     head_value = head.metric_value
     if base_value is not None and head_value is not None:
-        required = max(min_delta, relative * abs(base_value))
         delta = head_value - base_value
-        if delta >= required:
+        # Detector metrics are decimal measurements. Binary rounding can turn
+        # an exact 20% increase (e.g. 9.5 -> 11.4) into a false regression.
+        if (base_value > 0 and delta >= min_delta
+                and Decimal(str(head_value)) > Decimal(str(base_value)) * (1 + Decimal(str(relative)))):
             return {
                 "reason": "metric",
                 "metric": metric_key_for(head),
@@ -240,6 +242,51 @@ def worsen_detail(
             "severity_head": head.severity,
         }
     return None
+
+
+def long_method_crossings(base: dict, head: dict, findings: Iterable[Finding], root: str) -> dict:
+    """Evidence for previously measured methods whose effective length now exceeds the limit."""
+    return _threshold_crossings(base, head, findings, root, "Long Method", "LONG_METHOD_LINES", 1)
+
+
+def measured_crossings(base: dict, head: dict, findings: List[Finding], root: str) -> dict:
+    evidence = long_method_crossings(base.get("long_methods"), head.get("long_methods"), findings, root)
+    evidence.update(_threshold_crossings(base.get("large_classes"), head.get("large_classes"),
+                                        findings, root, "Large Class", "LARGE_CLASS_METHODS", 0))
+    return evidence
+
+
+def _threshold_crossings(base, head, findings, root, rule, metric, minimum):
+    if not isinstance(head, dict):
+        return {}
+    threshold = head.get("threshold")
+    if (not isinstance(base, dict) or type(threshold) not in (int, float)
+            or base.get("threshold") != threshold):
+        return {}
+    before = base.get("files")
+    if not isinstance(before, dict):
+        return {}
+    after = head.get("files")
+    if not isinstance(after, dict):
+        return {}
+    evidence = {}
+    for finding in findings:
+        if finding.category != "code" or finding.smell_type != rule:
+            continue
+        path = relative_path(finding.file_path, root)
+        old_file = before.get(path)
+        new_file = after.get(path)
+        if not isinstance(old_file, dict) or not isinstance(new_file, dict):
+            continue
+        old = old_file.get(finding.symbol)
+        new = new_file.get(finding.symbol)
+        if (type(old) is int and type(new) is int and new == finding.metric_value
+                and minimum <= old <= threshold < new):
+            evidence[fingerprint_string(finding, root)] = {
+                "reason": "metric", "metric": metric, "base": old,
+                "head": new, "delta": new - old, "threshold": threshold,
+            }
+    return evidence
 
 
 def threshold_for(

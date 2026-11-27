@@ -39,7 +39,7 @@ class CodeSmellDetector:
         file_content (list): A list of strings representing the content of the analyzed file.
     """
 
-    def __init__(self, thresholds):
+    def __init__(self, thresholds, *, method_lengths=None, class_sizes=None):
         """
         Initialize the CodeSmellDetector with given thresholds.
 
@@ -48,6 +48,8 @@ class CodeSmellDetector:
         """
         self.code_smells = []
         self.thresholds = thresholds
+        self.method_lengths = method_lengths
+        self.class_sizes = class_sizes
         self.errors = []  # files that could not be analyzed, filled by the caller
         # Cross-file accumulation for smells needing multi-file context
         self._global_class_methods = defaultdict(list)
@@ -154,6 +156,9 @@ class CodeSmellDetector:
         Detect long methods in the given module: functions with more than
         LONG_METHOD_LINES lines that are neither blank, comments nor docstring.
         """
+        lengths = None
+        if self.method_lengths is not None:
+            lengths = self.method_lengths.setdefault(file_path, {})
         for node in module.nodes_of_class(nodes.FunctionDef):
             # Skip properties
             if 'property' in self._decorator_names(node):
@@ -167,9 +172,14 @@ class CodeSmellDetector:
                 if line and not line.startswith('#') and line_no not in doc_lines:
                     actual_lines += 1
 
+            parent_class = node.parent.name if isinstance(node.parent, nodes.ClassDef) else None
+            display_name = f"{parent_class}.{node.name}" if parent_class else node.name
+            if lengths is not None:
+                # The detector exposes a short name for nested definitions. Refuse
+                # to infer identity when the visible name omits scope or is repeated.
+                unique = display_name not in lengths and node.qname().lstrip(".") == display_name
+                lengths[display_name] = actual_lines if unique else None
             if actual_lines > self.thresholds["LONG_METHOD_LINES"]:
-                parent_class = node.parent.name if isinstance(node.parent, nodes.ClassDef) else None
-                display_name = f"{parent_class}.{node.name}" if parent_class else node.name
                 self.add_smell(
                     name="Long Method",
                     description=f"'{display_name}' has {actual_lines} lines in {file_path} at line {node.lineno}",
@@ -183,7 +193,13 @@ class CodeSmellDetector:
         """
         Detect large classes in the given module.
         """
+        sizes = self.class_sizes.setdefault(file_path, {}) if self.class_sizes is not None else None
         for node in module.nodes_of_class(nodes.ClassDef):
+            # The finding carries a bare class name. Reserve skipped and nested
+            # names too so that a second definition cannot borrow their history.
+            measurable = sizes is not None and node.name not in sizes and isinstance(node.parent, nodes.Module)
+            if sizes is not None:
+                sizes[node.name] = None
             # Skip data classes and exception classes
             is_dataclass = False
             if node.decorators:
@@ -217,6 +233,8 @@ class CodeSmellDetector:
                         continue
                     non_trivial_methods.append(method)
 
+            if measurable:
+                sizes[node.name] = len(non_trivial_methods)
             if len(non_trivial_methods) > self.thresholds["LARGE_CLASS_METHODS"]:
                 self.add_smell(
                     name="Large Class",

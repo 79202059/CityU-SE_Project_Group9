@@ -30,9 +30,10 @@ import argparse
 import json
 import os
 import platform
-import shutil
 import sys
+import tempfile
 import time
+from pathlib import Path
 
 from benchmarks.generate_100k import generate
 from code_quality_analyzer.cache import AnalysisCache
@@ -109,6 +110,11 @@ def _nfr_block(seconds: dict) -> dict:
 
 
 def run(root: str, config_path: str) -> dict:
+    with tempfile.TemporaryDirectory(prefix="pyexamine-bench-cache-", dir=Path(root).resolve().parent) as cache_dir:
+        return _run(root, config_path, cache_dir)
+
+
+def _run(root: str, config_path: str, cache_dir: str) -> dict:
     handler = ConfigHandler(config_path)
     files = sum(
         1
@@ -120,9 +126,6 @@ def run(root: str, config_path: str) -> dict:
 
     full_seconds, full_findings = _timed(lambda: analyze_tree(root, handler))
 
-    cache_dir = os.path.join(root, "..", "_bench_cache")
-    cache_dir = os.path.abspath(cache_dir)
-    shutil.rmtree(cache_dir, ignore_errors=True)
     cold_seconds, cold_findings = _timed(
         lambda: analyze_tree(root, handler, cache=AnalysisCache(cache_dir))
     )
@@ -139,21 +142,19 @@ def run(root: str, config_path: str) -> dict:
         if target:
             break
 
-    with open(target, "r", encoding="utf-8") as handle:
-        original = handle.read()
-    if original.endswith("\n") or not original:
-        touched = original + CHANGE_MARKER + "\n"
-    else:
-        touched = original + "\n" + CHANGE_MARKER + "\n"
-    with open(target, "w", encoding="utf-8", newline="\n") as handle:
-        handle.write(touched)
+    if target is None:
+        raise ValueError("the benchmark corpus needs a mod*.py file for the changed phase")
+    target = Path(target)
+    original = target.read_bytes()
+    newline = b"\r\n" if b"\r\n" in original else b"\n"
+    marker = (b"" if not original or original.endswith(b"\n") else newline) + CHANGE_MARKER.encode() + newline
     try:
+        target.write_bytes(original + marker)
         changed_seconds, changed_findings = _timed(
             lambda: analyze_tree(root, handler, cache=AnalysisCache(cache_dir))
         )
     finally:
-        with open(target, "w", encoding="utf-8", newline="\n") as handle:
-            handle.write(original)
+        target.write_bytes(original)
 
     if len(warm_findings) != len(full_findings):
         raise RuntimeError(
@@ -316,7 +317,7 @@ def render(result: dict) -> str:
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Measure full vs warm analysis on a 100k-line project.")
-    parser.add_argument("--root", default=os.path.join(os.environ.get("TEMP", "/tmp"), "pe-bench-100k"))
+    parser.add_argument("--root", help="new or empty generation directory, or existing corpus with --no-generate")
     parser.add_argument("--config", default="code_quality_config.yaml")
     parser.add_argument("--target-lines", type=int, default=100_000)
     parser.add_argument("--json", default=None, help="write the raw numbers here")
@@ -329,13 +330,19 @@ def main(argv=None) -> int:
     )
     args = parser.parse_args(argv)
 
-    if not args.no_generate:
-        if os.path.isdir(args.root):
-            shutil.rmtree(args.root)
-        counts = generate(args.root, args.target_lines)
-        print("generated %d files / %d lines" % (counts["files"], counts["lines"]))
-
-    result = run_repeated(args.root, args.config, args.repeat)
+    if args.no_generate and not args.root:
+        parser.error("--no-generate requires --root")
+    with tempfile.TemporaryDirectory(prefix="pyexamine-benchmark-") as temporary:
+        root = Path(args.root or temporary)
+        if args.no_generate:
+            if not root.is_dir():
+                parser.error("the corpus directory does not exist")
+        else:
+            if root.exists() and (not root.is_dir() or any(root.iterdir())):
+                parser.error("choose a new or empty directory for generation")
+            counts = generate(str(root), args.target_lines)
+            print("generated %d files / %d lines" % (counts["files"], counts["lines"]))
+        result = run_repeated(str(root), args.config, args.repeat)
     print(render(result))
     if args.json:
         os.makedirs(os.path.dirname(os.path.abspath(args.json)), exist_ok=True)

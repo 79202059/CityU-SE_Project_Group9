@@ -42,6 +42,7 @@ docs/_build/
 Thumbs.db
 
 # Generated reports and logs
+/.local-reports/
 *.log
 code_quality_report.*
 self_analysis.*
