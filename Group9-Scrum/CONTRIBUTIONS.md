@@ -5,8 +5,16 @@ cross-checked against primary story ownership and merged PRs. Hours are self-rep
 reviewed by the Scrum Master at each sprint review; the PDF's suggested approach (hours or story
 points, pro-rated by the mean) is used for the relative contribution table.
 
-**Team:** 6 members, placeholders **M1–M6** — replace with real names and student IDs before
-submission.
+
+| Code | Name         | Student ID | Role |
+| --- |--------------| --- | --- |
+| M1 | ChenShikai   |  | Product Owner |
+| M2 | XieQin       |  | Scrum Master |
+| M3 | HuangYiguo   |  | Lead developer |
+| M4 | LiuYuxuan    |  | Developer |
+| M5 | ChenZirui    |  | Developer |
+| M6 | HuangMinghui |  | Developer / test owner |
+
 
 ## 1. Hours per sprint
 
@@ -22,7 +30,7 @@ submission.
 | **Mean** |  | 12.0 | 12.0 | 16.0 | **40.0** |
 
 Sprint 1 and 2 totals match the capacity model (72 h); Sprint 3 includes the evaluation and
-wrap-up week. 240 h / 6 = **40 h per member**, inside the course's 30–40 h expectation.
+wrap-up week. 
 
 ## 2. Primary story ownership
 

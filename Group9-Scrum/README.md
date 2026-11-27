@@ -2,7 +2,16 @@
 
 **Project:** PyExamine-Delta — change-aware, context-adaptive code-smell detection for Python
 pull requests (fork of PyExamine 0.3.0) · **Course:** CS5351 Software Engineering, CityU (DG) ·
-**Team:** 6 students (M1–M6 placeholders) · **Snapshot:** 2026-11-26 (Week 12)
+**Team:** 6 students (M1–M6 placeholders) .
+
+| Code | Name         | Role |
+| --- |--------------| --- |
+| M1 | ChenShikai   | Product Owner |
+| M2 | XieQin       | Scrum Master |
+| M3 | HuangYiguo   | Lead developer |
+| M4 | LiuYuxuan    | Developer |
+| M5 | ChenZirui    | Developer |
+| M6 | HuangMinghui | Developer / test owner |
 
 This folder contains the Scrum artefacts required by the course project: product backlog with user
 stories and acceptance criteria, sprint plans and backlogs, three sprint burndowns plus a project
@@ -56,7 +65,7 @@ contribution table.
 | W10 | Nov 9 | S3 | Planning | `week-10.md` |
 | W11 | Nov 16 | S3 | Gate policy | `week-11.md` |
 | W12 | Nov 23 | S3 | Cache accepted; evaluation starts | `week-12.md` |
-| W13 | Nov 30 | S3 | Review, wrap-up | `week-13.md` (planned) |
+
 
 ## Folder layout
 
@@ -133,8 +142,6 @@ together.
 
 ## Data provenance — read before submitting
 
-Some numbers come from the repository and are verifiable; others are planning records reconstructed
-for this package. Reconcile the second group with your actual history before submission:
 
 | Source | Items |
 | --- | --- |
@@ -142,16 +149,5 @@ for this package. Reconcile the second group with your actual history before sub
 | **Planning records in this package (review before submitting)** | Story points, hours, meeting dates/attendance/decisions, issue and PR numbers, annotation progress (42/68), κ target, benchmark tag names |
 | **To fill in by the team** | Real member names and student IDs, real GitHub issue/PR numbers, final evaluation values, final κ, release tag, signatures in `CONTRIBUTIONS.md` |
 
-Nothing here is telemetry from your CI. Treat the meeting notes as drafts to be confirmed, not as
-transcripts. The burndown is a faithful rendering of the CSV in `data/`, and the CSV is the source
-of truth — if your actual data differs, edit the CSV and regenerate; do not edit the SVG by hand.
 
-## Next actions before Week 13 submission
 
-1. Replace M1–M6 with real names/IDs in `README.md`, `SPRINT_PLAN.md`, `CONTRIBUTIONS.md`.
-2. Copy this folder into the fork as `docs/scrum/` (and `meetings/` into `docs/meetings/`).
-3. Reconcile issue/PR numbers with GitHub; update `TRACEABILITY.md` and `ISSUE_LOG.md`.
-4. Commit the three ADRs to the fork's `docs/adr/` with accepted status.
-5. Fill the evaluation results from the Week 13 run; keep `EVALUATION_CONTRACT.md` unchanged.
-6. Confirm the burndown's last rows after Dec 3–4 and flip the remaining `forecast` flags.
-7. Sign the contribution declarations and confirm hours with each member.

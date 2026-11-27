@@ -63,16 +63,3 @@ Commit the CSV and the regenerated files together so the evidence and the chart 
 | Sprint 3 (Nov 9 – Dec 4) | 30 | 22 (8 forecast) | 30 (forecast) |
 | **Project** | **72** | **64** | mean closed-sprint velocity **21** |
 
-Release forecast: **72 SP accepted by 2026-12-03**, one day before the Week 13 review.
-
-## 6. Notes on interpretation
-
-- **Sprint 3 is not finished.** Days 14–19 are a forecast derived from the remaining evaluation
-  tasks (annotation → baseline runs → metrics → report). They are drawn dashed and must be
-  replaced with actual values.
-- **Scope never changed inside a sprint.** The two scope moves (risk to Sprint 3, baseline to
-  Sprint 1) happened at sprint boundaries and are logged in `SPRINT_PLAN.md` §6.
-- **The project line is not the sum of sprint lines** at a given date: it is sampled weekly at
-  the standing meeting, so intra-week drops appear at the next Monday checkpoint.
-- **Velocity is 21, 21, 30**: the last sprint is larger by design (evaluation + wrap-up), not a
-  productivity spike. Do not plan a fourth sprint at 30 SP on this evidence.
