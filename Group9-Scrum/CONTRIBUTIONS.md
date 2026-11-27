@@ -12,7 +12,7 @@ points, pro-rated by the mean) is used for the relative contribution table.
 | M2 | XieQin       |  | Scrum Master |
 | M3 | HuangYiguo   |  | Lead developer |
 | M4 | LiuYuxuan    |  | Developer |
-| M5 | ChenZirui    |  | Developer |
+| M5 | CaoZirui     |  | Developer |
 | M6 | HuangMinghui |  | Developer / test owner |
 
 

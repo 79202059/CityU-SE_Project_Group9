@@ -2,7 +2,7 @@
 
 **Project:** PyExamine-Delta — change-aware, context-adaptive code-smell detection for Python
 pull requests (fork of PyExamine 0.3.0) · **Course:** CS5351 Software Engineering, CityU (DG) ·
-**Team:** 6 students (M1–M6 placeholders) .
+**Team:** 6 students (M1–M6).
 
 | Code | Name         | Role |
 | --- |--------------| --- |
@@ -10,7 +10,7 @@ pull requests (fork of PyExamine 0.3.0) · **Course:** CS5351 Software Engineeri
 | M2 | XieQin       | Scrum Master |
 | M3 | HuangYiguo   | Lead developer |
 | M4 | LiuYuxuan    | Developer |
-| M5 | ChenZirui    | Developer |
+| M5 | CaoZirui     | Developer |
 | M6 | HuangMinghui | Developer / test owner |
 
 This folder contains the Scrum artefacts required by the course project: product backlog with user
