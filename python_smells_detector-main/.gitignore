@@ -71,6 +71,9 @@ tests/_tmp_*/
 pytest-cache-files-*/
 _pytest_tmp/
 
+# throw-away repository built by scripts/demo_pr.py
+demo/
+
 # pyexamine-delta artefacts written next to the analysed project
 # .pyexamine-baseline.json is deliberately NOT ignored: the baseline belongs
 # in the repository, otherwise every PR diffs against nothing.

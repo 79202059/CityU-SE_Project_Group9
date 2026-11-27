@@ -1,0 +1,20 @@
+# Commit pairs for the Baseline A/B/Proposed comparison.
+# Columns: repo,base,head. The repo is relative to the working directory,
+# so run this from the repository root:
+#
+#   python scripts/baseline_b.py --dataset eval/sample-dataset.csv
+#
+# These eight pairs are the most recent commits that touch at least one
+# .py file, one pull-request-sized change each (1-6 files, +33 to +316
+# lines). Replace this file with the frozen 68-PR sample from
+# EVALUATION_CONTRACT.md section 3.2 when that dataset lands; the script
+# only reads repo,base,head and ignores comments.
+repo,base,head
+.,0de1c1db^,0de1c1db
+.,53de1583^,53de1583
+.,e878487e^,e878487e
+.,9580afb^,9580afb
+.,ba6b5bda^,ba6b5bda
+.,b95e694^,b95e694
+.,b6bd5b3^,b6bd5b3
+.,747d4b6^,747d4b6

@@ -14,6 +14,24 @@
   `pyexamine-delta` document carrying `baselineState`, `rank` and
   `properties.risk` (5 results). `docs/nfr-evidence.md` records the table.
 
+### Evaluation tooling
+
+- `scripts/baseline_b.py` implements baseline B from `EVALUATION_CONTRACT.md`
+  section 4 (upstream findings filtered by the changed line numbers of a diff) and
+  prints baseline A, baseline B and the proposal side by side, so
+  `1 - median(B) / median(A)` is measured instead of assumed. The sample dataset
+  `eval/sample-dataset.csv` holds eight real commit pairs of this repository.
+- Measured over those eight pairs: median A 313.5, median B 3.0, median proposal
+  3.0, so both alternatives cut 99.0 % of the noise. B and the proposal tie on the
+  median and disagree in both directions per pair; `docs/evaluation-baselines.md`
+  records the rows, the two disagreements and the limitations (no labelled corpus,
+  no rename or move in the sample).
+- `scripts/demo_pr.py` rebuilds the demo pull request from
+  `tests/fixtures/demo_pr`: the baseline is written on the clean tree, a 52-line
+  function makes the gate fail, and splitting it makes the gate pass. The script
+  asserts that fail-then-pass sequence and prints the measured size of the change,
+  so the demo no longer depends on a hand-made repository.
+
 ### Performance evidence
 
 - `benchmarks/run_benchmark.py --repeat N` repeats the whole protocol and reports
