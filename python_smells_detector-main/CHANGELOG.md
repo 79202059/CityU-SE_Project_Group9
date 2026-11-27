@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Delta detects first threshold crossings for Long Method and Large Class, and reports measured growth above 20% for matched findings. Saved baselines and caches retain these measurements.
+- `--risk` explains new and worsened findings. JSON and SARIF send gate diagnostics to stderr. The demo walkthrough uses a temporary directory by default and accepts a new or empty destination.
+
 ### Output conformance
 
 - The SARIF writer is checked against the official 2.1.0 schema, not only
@@ -16,13 +19,15 @@
 
 ### Evaluation tooling
 
+- The evaluation runner validates manifests, detects unreadable diffs and exports individual findings for independent scoring. See the [evaluation guide](docs/evaluation-baselines.md).
+
 - `scripts/baseline_b.py` implements baseline B from `EVALUATION_CONTRACT.md`
   section 4 (upstream findings filtered by the changed line numbers of a diff) and
   prints baseline A, baseline B and the proposal side by side, so
   `1 - median(B) / median(A)` is measured instead of assumed. The sample dataset
   `eval/sample-dataset.csv` holds eight real commit pairs of this repository.
-- Measured over those eight pairs: median A 313.5, median B 3.0, median proposal
-  3.0, so both alternatives cut 99.0 % of the noise. B and the proposal tie on the
+- The original eight-pair run had median A 313.5, median B 3.0 and median proposal
+  3.0, a 99.0% reduction in displayed findings. B and the proposal tied on the
   median and disagree in both directions per pair; `docs/evaluation-baselines.md`
   records the rows, the two disagreements and the limitations (no labelled corpus,
   no rename or move in the sample).

@@ -229,6 +229,11 @@ class TestDiffParsing(unittest.TestCase):
         diff = "--- a/gone.py\n+++ /dev/null\n@@ -1,0 +0,0 @@\n"
         self.assertEqual(parse_diff_hunks(diff), {})
 
+    def test_quoted_utf8_path_and_header_like_added_line(self):
+        diff = ('diff --git a/old b/new\n+++ "b/\\350\\256\\242\\345\\215\\225.py"\n'
+                '@@ -2 +2 @@\n+++ value\n@@ -7,0 +7 @@\n+change\n')
+        self.assertEqual(parse_diff_hunks(diff), {"订单.py": [(2, 2), (7, 7)]})
+
     def test_missing_git_returns_empty(self):
         # A path that cannot be a git repository on any platform.
         self.assertEqual(changed_lines(os.path.join("no", "such", "repo"), "a", "b"), {})

@@ -84,6 +84,7 @@ def classify_lifecycle(
     *,
     worsen: Optional[WorsenJudge] = None,
     worsen_details: Optional[Dict[str, dict]] = None,
+    crossings: Optional[Dict[str, dict]] = None,
     fuzzy: Optional[FuzzyMatcher] = None,
     fuzzy_details: Optional[Dict[str, dict]] = None,
 ) -> Dict[str, List[Finding]]:
@@ -118,9 +119,12 @@ def classify_lifecycle(
     for key, finding in head_by_key.items():
         previous = base_by_key.get(key)
         if previous is None:
-            result[NEW].append(finding)
-            continue
-        evidence = worsen(previous, finding) if worsen is not None else None
+            evidence = (crossings or {}).get(fingerprint_string(finding, head_root)) if worsen else None
+            if evidence is None:
+                result[NEW].append(finding)
+                continue
+        else:
+            evidence = worsen(previous, finding) if worsen is not None else None
         if evidence is None:
             result[UNCHANGED].append(finding)
             continue

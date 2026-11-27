@@ -12,12 +12,15 @@ import json
 import os
 import shutil
 import subprocess
+import tempfile
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
+from io import StringIO
 
 from code_quality_analyzer.delta import EXIT_GATE_REACHED, EXIT_OK, EXIT_USAGE, main
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-WORK = os.path.join(HERE, "_tmp_cli")
+WORK = ""
 REPO = os.path.join(WORK, "repo")
 BASELINE = os.path.join(WORK, "baseline.json")
 
@@ -79,6 +82,17 @@ def _force_remove(path):
 
 
 def git(*args):
+    if args and args[0] != "init":
+        root = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=REPO,
+            capture_output=True,
+            text=True,
+        )
+        if root.returncode != 0 or not os.path.samefile(root.stdout.strip(), REPO):
+            raise AssertionError(
+                "refusing git operation outside the CLI test repository: %s" % root.stdout
+            )
     env = dict(os.environ)
     env.update({
         "GIT_AUTHOR_NAME": "tests",
@@ -108,15 +122,8 @@ def write(relative, text):
 
 
 def setUpModule():
-    global WORK, REPO, BASELINE
-    base = os.path.join(HERE, "_tmp_cli")
-    _force_remove(base)
-    if os.path.exists(base):
-        # A previous run left git objects behind that Windows still holds open;
-        # use a fresh directory instead of failing the whole module.
-        base = "%s_%d" % (base, os.getpid())
-        _force_remove(base)
-    WORK = base
+    global BASELINE, REPO, WORK
+    WORK = tempfile.mkdtemp(prefix="pyexamine-delta-cli-")
     REPO = os.path.join(WORK, "repo")
     BASELINE = os.path.join(WORK, "baseline.json")
     os.makedirs(REPO, exist_ok=True)
@@ -159,6 +166,112 @@ class TestOutputFormats(unittest.TestCase):
     def test_sarif_is_a_valid_document(self):
         code = main([REPO, *baseline("--format", "sarif")])
         self.assertEqual(EXIT_OK, code)
+
+    def test_machine_reports_keep_status_messages_on_stderr(self):
+        cases = [
+            ("success", [], EXIT_OK, None),
+            ("risk filter", ["--min-risk", "100"], EXIT_OK, "risk:"),
+            (
+                "severity gate",
+                ["--fail-on-new", "low"],
+                EXIT_GATE_REACHED,
+                "gate:",
+            ),
+            (
+                "budget gate",
+                ["--max-new", "0"],
+                EXIT_GATE_REACHED,
+                "budget:",
+            ),
+            (
+                "risk-filtered gate",
+                ["--min-risk", "0", "--fail-on-new", "low"],
+                EXIT_GATE_REACHED,
+                "gate:",
+            ),
+        ]
+        for report_format in ("json", "sarif"):
+            for label, options, expected_code, diagnostic in cases:
+                with self.subTest(format=report_format, case=label):
+                    stdout = StringIO()
+                    stderr = StringIO()
+                    with redirect_stdout(stdout), redirect_stderr(stderr):
+                        code = main(
+                            [REPO, *baseline("--format", report_format, *options)]
+                        )
+
+                    self.assertNotIn("risk:", stdout.getvalue())
+                    self.assertNotIn("gate:", stdout.getvalue())
+                    self.assertNotIn("budget:", stdout.getvalue())
+
+                    document = json.loads(stdout.getvalue())
+                    self.assertEqual(code, expected_code)
+                    if report_format == "json":
+                        self.assertIn("findings", document)
+                    else:
+                        self.assertIn("runs", document)
+                        self.assertEqual("2.1.0", document["version"])
+                    self.assertEqual(
+                        diagnostic is not None,
+                        diagnostic in stderr.getvalue() if diagnostic else False,
+                    )
+
+    def test_machine_report_baseline_status_stays_on_stderr(self):
+        for report_format in ("json", "sarif"):
+            with self.subTest(format=report_format):
+                baseline_path = os.path.join(
+                    WORK, "machine-baseline-%s.json" % report_format
+                )
+                stdout = StringIO()
+                stderr = StringIO()
+                with redirect_stdout(stdout), redirect_stderr(stderr):
+                    code = main([
+                        REPO,
+                        "--base", first(),
+                        "--head", first(),
+                        "--baseline", baseline_path,
+                        "--baseline-mode", "write",
+                        "--format", report_format,
+                    ])
+
+                document = json.loads(stdout.getvalue())
+                self.assertEqual(code, EXIT_OK)
+                self.assertIn("Baseline written to", stderr.getvalue())
+                if report_format == "sarif":
+                    self.assertIn("runs", document)
+
+    def test_machine_report_errors_do_not_write_to_stdout(self):
+        stdout = StringIO()
+        stderr = StringIO()
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            code = main([
+                os.path.join(WORK, "no-such-project"),
+                "--base", first(),
+                "--format", "json",
+            ])
+
+        self.assertEqual(code, EXIT_USAGE)
+        self.assertEqual("", stdout.getvalue())
+        self.assertIn("error:", stderr.getvalue())
+
+    def test_machine_report_output_files_keep_status_on_stdout(self):
+        for report_format in ("json", "sarif"):
+            with self.subTest(format=report_format):
+                target = os.path.join(WORK, "machine-report-%s" % report_format)
+                stdout = StringIO()
+                stderr = StringIO()
+                with redirect_stdout(stdout), redirect_stderr(stderr):
+                    code = main([
+                        REPO,
+                        *baseline("--format", report_format, "--output", target),
+                    ])
+
+                self.assertEqual(code, EXIT_OK)
+                self.assertIn("Text report written to", stdout.getvalue())
+                self.assertIn("JSON report written to", stdout.getvalue())
+                self.assertTrue(os.path.isfile(target + ".txt"))
+                with open(target + ".json", encoding="utf-8") as handle:
+                    self.assertIn("findings", json.load(handle))
 
     def test_markdown_renders_a_table(self):
         code = main([REPO, *baseline("--format", "markdown")])
@@ -265,6 +378,93 @@ class TestOptions(unittest.TestCase):
     def test_risk_flag_does_not_change_the_exit_code(self):
         code = main([REPO, *baseline("--risk")])
         self.assertEqual(EXIT_OK, code)
+
+    def test_risk_explains_worsened_findings_without_changing_default_gate(self):
+        checkout = "def checkout():\n" + "\n".join(
+            "    row%d = %d" % (index, index) for index in range(90)
+        ) + "\n    return row89\n"
+        write("shop/checkout.py", '"""Checkout flow."""\n\n' + checkout)
+        worsened_head = commit_all("worsen an existing long method")
+        new_method = "def new_checkout():\n" + "\n".join(
+            "    value%d = %d" % (index, index) for index in range(90)
+        ) + "\n    return value89\n"
+        write("shop/new_checkout.py", '"""New checkout helpers."""\n\n' + new_method)
+        mixed_head = commit_all("add another long method")
+
+        stdout = StringIO()
+        stderr = StringIO()
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            code = main([
+                REPO,
+                "--base", second(),
+                "--head", mixed_head,
+                "--format", "json",
+                "--risk",
+            ])
+
+        mixed_payload = json.loads(stdout.getvalue())
+        self.assertEqual(EXIT_OK, code)
+        self.assertTrue(mixed_payload["findings"]["NEW"])
+        self.assertTrue(mixed_payload["findings"]["WORSENED"])
+        worsened = mixed_payload["findings"]["WORSENED"][0]
+        self.assertIn("risk", worsened)
+        self.assertGreaterEqual(worsened["risk"]["score"], 0)
+        self.assertTrue(worsened["risk"]["reasons"])
+
+        # The same head tree has one NEW in each run. Adding a WORSENED finding
+        # must not change the NEW score used by the default gate.
+        stdout = StringIO()
+        with redirect_stdout(stdout), redirect_stderr(StringIO()):
+            code = main([
+                REPO,
+                "--base", worsened_head,
+                "--head", mixed_head,
+                "--format", "json",
+                "--risk",
+            ])
+        new_only_payload = json.loads(stdout.getvalue())
+        self.assertEqual(EXIT_OK, code)
+        mixed_new = mixed_payload["findings"]["NEW"][0]
+        new_only = new_only_payload["findings"]["NEW"][0]
+        self.assertEqual(mixed_new["file"], new_only["file"])
+        self.assertEqual(mixed_new["risk"]["score"], new_only["risk"]["score"])
+
+        # WORSENED is reportable by --risk, but remains outside the default
+        # NEW-only severity gate unless the user explicitly opts in.
+        stderr = StringIO()
+        stdout = StringIO()
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            code = main([
+                REPO,
+                "--base", second(),
+                "--head", worsened_head,
+                "--format", "json",
+                "--fail-on-new", "low",
+                "--min-risk", "0",
+            ])
+        self.assertEqual(EXIT_OK, code)
+        default_gate_payload = json.loads(stdout.getvalue())
+        self.assertTrue(default_gate_payload["findings"]["WORSENED"])
+        self.assertIn("risk", default_gate_payload["findings"]["WORSENED"][0])
+        self.assertNotIn("gate:", stderr.getvalue())
+
+        stderr = StringIO()
+        stdout = StringIO()
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            code = main([
+                REPO,
+                "--base", second(),
+                "--head", worsened_head,
+                "--format", "json",
+                "--fail-on-new", "low",
+                "--min-risk", "0",
+                "--fail-on-worsened",
+                "--max-new", "0",
+            ])
+        self.assertEqual(EXIT_GATE_REACHED, code)
+        self.assertIn("new/worsened", stderr.getvalue())
+        self.assertNotIn("budget:", stderr.getvalue())
+        self.assertIn("findings", json.loads(stdout.getvalue()))
 
     def test_level_policy_is_forwarded(self):
         code = main([REPO, *baseline("--format", "sarif", "--level-policy", "advisory")])

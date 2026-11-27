@@ -15,14 +15,14 @@ from __future__ import annotations
 
 import argparse
 import os
-import shutil
+import stat
 import subprocess
 import sys
+import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PACKAGE_ROOT = os.path.dirname(HERE)
 FIXTURES = os.path.join(PACKAGE_ROOT, "tests", "fixtures", "demo_pr")
-DEFAULT_ROOT = os.path.join("demo", "demo-pr")
 
 CLEAN_CART = "shop/cart.py"
 ORDERS = "shop/orders.py"
@@ -81,29 +81,32 @@ def added_lines(root: str, base: str, head: str) -> tuple:
     return added, removed, files
 
 
-def force_remove(path: str) -> None:
-    """Remove a directory tree even when git left read-only objects behind."""
-    def onerror(function, name, _info):
-        try:
-            os.chmod(name, 0o700)
-            function(name)
-        except OSError:
-            pass
-
-    shutil.rmtree(path, onerror=onerror)
-
-
 def build_repository(root: str) -> None:
-    """Create the clean starting point: a package with two small modules."""
-    if os.path.isdir(root):
-        force_remove(root)
-    os.makedirs(root)
-    write_file(root, INIT_FILE, INIT_TEXT)
-    write_file(root, CLEAN_CART, read_fixture("cart.py"))
-    write_file(root, ORDERS, read_fixture("orders_fixed.py"))
+    """Initialize the demo in a new or empty directory."""
+    # Git hooks can export repository paths that take precedence over git -C.
+    for name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE",
+                 "GIT_OBJECT_DIRECTORY"):
+        if os.environ.get(name):
+            raise RuntimeError(f"Run the demo with {name} unset so Git uses the demo directory.")
+    os.makedirs(root, exist_ok=True)
+    info = os.lstat(root)
+    if stat.S_ISLNK(info.st_mode) or (
+        getattr(info, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT
+    ):
+        raise ValueError(f"Choose a demo directory that is not a link or junction: {root}")
+    with os.scandir(root) as entries:
+        if next(entries, None) is not None:
+            raise ValueError(f"Demo directory is not empty: {root}. Choose a new or empty directory.")
+
+    # Reserve the repository before writing fixtures. Concurrent demos targeting
+    # the same empty directory cannot both initialize it.
+    os.mkdir(os.path.join(root, ".git"))
     result = git(root, "init", "-b", "main")
     if result.returncode != 0:
         raise RuntimeError("git init failed: %s" % (result.stderr or result.stdout).strip())
+    write_file(root, INIT_FILE, INIT_TEXT)
+    write_file(root, CLEAN_CART, read_fixture("cart.py"))
+    write_file(root, ORDERS, read_fixture("orders_fixed.py"))
     commit(root, "initial layout")
 
 
@@ -129,15 +132,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--root",
-        default=DEFAULT_ROOT,
-        help="directory that will hold the throw-away repository (default: %(default)s)",
+        help="keep the demo in a new or empty directory; by default a temporary directory "
+             "is created for this run and cleaned up afterwards",
     )
     return parser
 
 
 def run(args: argparse.Namespace) -> int:
     """Execute the three-step walkthrough and return 0 when every step matched."""
-    root = os.path.abspath(args.root)
+    if args.root is not None:
+        return run_walkthrough(os.path.abspath(args.root))
+    with tempfile.TemporaryDirectory(prefix="pyexamine-demo-") as root:
+        return run_walkthrough(root)
+
+
+def run_walkthrough(root: str) -> int:
     build_repository(root)
     print("built a clean repository at %s" % root)
 
@@ -166,6 +175,7 @@ def run(args: argparse.Namespace) -> int:
             "--head", head,
             "--baseline-mode", "diff",
             "--fail-on-new", "medium",
+            "--fail-on-worsened",
             "--level-policy", "triage",
             "--format", "markdown",
         ],
@@ -185,6 +195,7 @@ def run(args: argparse.Namespace) -> int:
             "--head", fixed,
             "--baseline-mode", "diff",
             "--fail-on-new", "medium",
+            "--fail-on-worsened",
             "--level-policy", "triage",
             "--format", "markdown",
         ],
@@ -203,7 +214,7 @@ def main(argv: list = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         return run(args)
-    except (OSError, RuntimeError) as error:
+    except (OSError, RuntimeError, ValueError) as error:
         print("error: %s" % error, file=sys.stderr)
         return 2
 

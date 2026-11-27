@@ -333,14 +333,14 @@ A story can enter a sprint only when:
 
 ## 6. Non-functional requirements and architecture options
 
-The project targets **four** NFRs (6-person team requires at least two). Each is addressed by
+The six-person team selected **performance and reliability** for formal acceptance. Extensibility and usability are supporting design goals. Each is addressed by
 an explicit architectural design option with a rationale; ADRs live in `adr/` and in the fork's
 `docs/adr/`.
 
 | NFR | Target | Architectural option | Rationale (why this option) | ADR |
 | --- | --- | --- | --- | --- |
 | **Performance** | Incremental run ≤ 40% of full analysis, or ≤ 30 s on the agreed 100k-LOC benchmark | Content-addressed whole-tree analysis memo (manifest of file hashes + threshold/version digest) | PRs touch few files but cross-file smells accumulate state, so per-file reuse would silently change results; whole-tree memo is correct by construction and makes repeated gate runs O(hashing) | ADR-008 (committed) |
-| **Reliability** | New-smell F1 ≥ 0.85 on the frozen dataset; no false `NEW` after cosmetic moves | Two-stage identity: exact fingerprint (rule + path + symbol + AST) then scored fuzzy matching with an explicit acceptance threshold; frozen regression corpus | Line-based diff is provably unstable under insertions/moves; staged matching degrades gracefully and keeps precision auditable instead of hiding heuristics in the detector | ADR-009 (draft) |
+| **Reliability** | New-smell F1 ≥ 0.85 on the frozen dataset, with cosmetic moves tracked separately | Exact rule, relative path and symbol, followed by fuzzy matching using normalised AST shape and location | Exact identity survives growth of the same function. Fuzzy evidence supports tracking a symbol across a rename or move. | [ADR-009](adr/ADR-009-reliability-staged-matching.md) |
 | **Extensibility** | Add a detector without touching the comparison engine | Detector Adapter + unified `Finding` model + stable rule registry (`pyex-<category>-<slug>`, 47 ids) | The fork must inherit upstream detectors without forking their logic; a normalised finding boundary keeps the delta engine detector-agnostic | ADR-010 (draft) |
 | **Usability** | New user installs, runs and interprets a comparison within 5 minutes | Single-command CLI, four output formats (text/JSON/Markdown/SARIF), explainable risk reasons, quick-start docs; explicitly no web UI | The tool is used inside an existing PR workflow; a CLI plus PR-native output removes setup cost, while a UI would add a second surface to secure and test | ADR-011 (draft) |
 

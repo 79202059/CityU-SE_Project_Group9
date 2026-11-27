@@ -130,6 +130,8 @@ the comparison is reproducible.
 
 ## 10. Status (2026-11-26)
 
+The table records the team's status at the time. Verifying its completion counts requires the original PR manifest, independent labels and tagged corpus. The eight bundled pairs and the supplementary controlled cases can be replayed using the [evaluation guide](../python_smells_detector-main/docs/evaluation-baselines.md).
+
 | Item | Status |
 | --- | --- |
 | Contract | Frozen since 2026-11-06; no metric changed |

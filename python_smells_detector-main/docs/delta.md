@@ -22,7 +22,7 @@ with `git worktree`, so the working tree is never touched.
 | Stable fingerprints | always on | the same smell keeps one identity even when its line number moves |
 | Rename / move matching | `--no-fuzzy`, `--fuzzy-threshold` | a renamed or moved function is not reported as one new smell plus one fixed smell; a completely different name still pairs when the body shape is intact (AST shape is a scoring signal, not part of the exact key) |
 | Adaptive thresholds | `pyexamine-delta calibrate` | what "long" and "large" mean *in this project*, not in a library average; moves `LARGE_CLASS_METHODS` as well as the structural `NOM_THRESHOLD` |
-| Explainable risk score | `--risk`, `--min-risk` | which of the new findings deserve review first, with the reasons spelled out (metric vs threshold, diff overlap, fan-in, confidence) |
+| Explainable risk score | `--risk`, `--min-risk` | which new and worsened findings deserve review first, with the reasons spelled out (metric vs threshold, diff overlap, fan-in, confidence) |
 | CI gate | `--fail-on-new`, `--fail-on-worsened`, `--max-new` | fail the build on new findings, not on the whole project's backlog |
 | SARIF 2.1.0 | `--format sarif` | GitHub code scanning annotations, inline on the diff |
 | PR summary | `--format markdown` | a table for `$GITHUB_STEP_SUMMARY` |
@@ -35,7 +35,7 @@ pip install -e .
 # snapshot the baseline on main
 pyexamine-delta . --base origin/main --head origin/main --baseline-mode write
 
-# in a pull request: only what the PR introduced, ranked by risk
+# in a pull request: changed findings ranked by risk, with NEW-only gate by default
 pyexamine-delta . --base origin/main --format markdown --risk
 pyexamine-delta . --base origin/main --format sarif --risk > delta.sarif
 pyexamine-delta . --base origin/main --risk --min-risk 40 --fail-on-new medium --max-new 20
@@ -46,6 +46,35 @@ pyexamine-delta . --base origin/main --config pyexamine-thresholds.yaml
 ```
 
 Exit codes: `0` clean, `1` gate reached (or the run failed), `2` usage error.
+
+For `--format json` and `--format sarif`, standard output contains only the
+machine-readable report. Progress, risk-filter, gate, budget, and error
+diagnostics go to standard error, so redirecting stdout keeps a parseable report
+even when the gate rejects the PR. When `--output` is used, status messages
+remain on standard output and the text and JSON files are written as before.
+
+`--risk` attaches scores to both `NEW` and `WORSENED` findings. By default,
+`--fail-on-new` and `--max-new` still count only `NEW`. Add
+`--fail-on-worsened` to include `WORSENED` in those gate decisions. `--min-risk`
+filters only findings that are eligible for the selected gate.
+
+For a matched finding with numeric metrics on both revisions, `WORSENED` means
+the head metric grew by more than 20% of the positive base metric. A growth of
+exactly 20% remains `UNCHANGED`. Findings without comparable numeric metrics
+use a severity increase as the existing fallback.
+
+For Long Method, the detector also records effective lengths of eligible functions
+and methods below the threshold. With the same threshold in both snapshots, a
+uniquely identified function going from 45 to 46 effective lines at a limit of
+45 is `WORSENED`. A newly added function of 46 lines is `NEW`. Enable
+`--fail-on-worsened` to include the first case in the severity or budget gate.
+The comparison requires the same relative file and unambiguous qualified name.
+For a simultaneous rename, an ambiguous nested name, a changed threshold, or an
+older saved baseline lacking measurements, an unmatched head finding remains
+`NEW`. Existing above-threshold findings still use the regular fuzzy matcher.
+Refresh the baseline on the accepted base revision to capture the extra metrics.
+
+Large Class applies the same first-crossing decision to the number of non-trivial methods in an eligible, uniquely named top-level class. A count of zero in base is valid. Methods excluded by the detector, such as simple getters, contribute zero. A newly introduced class above the threshold is NEW. Nested or ambiguous names, changed thresholds and older baselines without class measurements retain the ordinary unmatched-finding behaviour. The structural SIZE2 detector uses its own rule.
 
 ## Two things that bite
 

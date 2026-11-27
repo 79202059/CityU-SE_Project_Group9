@@ -1,13 +1,12 @@
-"""Tests for ``scripts/baseline_b.py`` - the Baseline A/B/Proposed counter.
-
-The script is not part of the installed package, so it is loaded by path.  Only
-the pure functions are covered here: the git-dependent part is exercised by
-running the script over real commit pairs (see ``docs/evaluation-baselines.md``).
-"""
+"""Baseline A/B/Proposed counts, manifest preflight and CLI error handling."""
 
 import importlib.util
+import json
 import os
+import subprocess
 import unittest
+
+import pytest
 
 from code_quality_analyzer.finding import CATEGORY_CODE, Finding
 
@@ -121,8 +120,8 @@ class TestSummarise(unittest.TestCase):
 
     def test_zero_baseline_does_not_divide_by_zero(self):
         summary = baseline_b.summarise([self._row(0, 0, 0)])
-        self.assertEqual(summary["reduction_b_vs_a"], 0.0)
-        self.assertEqual(summary["reduction_proposed_vs_a"], 0.0)
+        self.assertIsNone(summary["reduction_b_vs_a"])
+        self.assertIsNone(summary["reduction_proposed_vs_a"])
 
     def test_empty_rows_are_reported_as_zero(self):
         summary = baseline_b.summarise([])
@@ -130,45 +129,76 @@ class TestSummarise(unittest.TestCase):
         self.assertEqual(summary["median"]["A"], 0.0)
 
 
-class TestDataset(unittest.TestCase):
-    def setUp(self):
-        self.path = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "_tmp_baseline_b", "dataset.csv"
-        )
-        os.makedirs(os.path.dirname(self.path), exist_ok=True)
+def test_named_manifest_maps_reordered_columns_and_preserves_pairs(tmp_path, monkeypatch, capsys):
+    path = tmp_path / "dataset.csv"
+    path.write_bytes((
+        '# comment, "unbalanced\r\n\r\npr,HEAD,Repository,notes,base\r\n'
+        '7,b,"项目,one","first line\r\n# still inside notes",a\r\n'
+        '8,c,two,,b\r\n'
+    ).encode("utf-8-sig"))
+    seen = []
 
-    def tearDown(self):
-        directory = os.path.dirname(self.path)
-        if os.path.isfile(self.path):
-            os.remove(self.path)
-        if os.path.isdir(directory):
-            os.rmdir(directory)
+    def count(repo, base, head, config_handler, **kwargs):
+        seen.append((repo, base, head))
+        return {"repo": repo, "counts": {"A": 1, "B": 1, "proposed": 1}}
 
-    def _write(self, text):
-        with open(self.path, "w", newline="\n", encoding="utf-8") as handle:
-            handle.write(text)
+    monkeypatch.setattr(baseline_b, "counts_for_pair", count)
+    assert baseline_b.main(["--dataset", str(path), "--format", "json"]) == 0
+    assert json.loads(capsys.readouterr().out)["summary"]["pairs"] == 2
+    assert seen == [("项目,one", "a", "b"), ("two", "b", "c")]
 
-    def test_comments_and_header_are_skipped(self):
-        self._write(
-            "# comment line\n"
-            "#\n"
-            "repo,base,head\n"
-            ".,main~1,main\n"
-            "other,abc,def\n"
-        )
-        self.assertEqual(
-            baseline_b._dataset_rows(self.path),
-            [(".", "main~1", "main"), ("other", "abc", "def")],
-        )
 
-    def test_header_after_comments_is_skipped(self):
-        self._write("# a\n# b\n# c\nrepo,base,head\n.,aaa,bbb\n")
-        self.assertEqual(baseline_b._dataset_rows(self.path), [(".", "aaa", "bbb")])
+def test_headerless_preflight_needs_no_repository_or_analysis(tmp_path, monkeypatch, capsys):
+    path = tmp_path / "dataset.csv"
+    path.write_text("# headerless legacy input\nrepo,abc,HEAD\nrepo,a,b\n", encoding="utf-8")
+    monkeypatch.setattr(baseline_b, "ConfigHandler", lambda *_: pytest.fail("loaded detectors' config"))
+    monkeypatch.setattr(subprocess, "run", lambda *a, **kw: pytest.fail("started a subprocess"))
+    assert baseline_b.main(["--check-dataset", str(path), "--format", "json"]) == 0
+    assert json.loads(capsys.readouterr().out) == {"pairs": 2, "repo_paths": 1}
 
-    def test_short_row_is_rejected(self):
-        self._write("repo,base,head\n.,onlytwo\n")
-        with self.assertRaises(ValueError):
-            baseline_b._dataset_rows(self.path)
+
+@pytest.mark.parametrize(("content", "location", "detail"), [
+    ("# only comments\nrepo,base,head\n", "", "no commit pairs"),
+    ("repo,base,notes\n.,a,n\n", ":1:", "'head'"),
+    ("pr,base,head\n7,a,b\n", ":1:", "'repo'"),
+    ("base,repo,repository,head\n", ":1:", "'repo'"),
+    ("repo,base,head\n.,a\n", ":2:", "expected 3 columns"),
+    (".,a\n", ":1:", "rows need repo,base,head"),
+    ("repo,base,head\n.,a,b\n,aaa,bbb\n", ":3:", "empty 'repo'"),
+    ("repo,base,head\n.,  ,b\n", ":2:", "empty 'base'"),
+    ("repo,base,head\n.,a,\n", ":2:", "empty 'head'"),
+    ("repo,base,head\n.,a,b\nrepo,base,head\n", ":3:", "repeated header"),
+    ('repo,base,head,pr\n.,a,b,"two\nlines"\n.,a,b,2\n', ":4:", "first on line 2"),
+    ('repo,base,head\n.,a,"unterminated\n', ":2:", "invalid CSV"),
+    ("repo,base,head\n.,a,--stat\n", ":2:", "invalid 'head'"),
+    # Python 3.10 rejects NUL in csv.reader; newer versions pass it to field validation.
+    ("repo,base,head\n.,a,b\x00c\n", ":2:", "invalid"),
+])
+def test_manifest_errors_precede_analysis_and_preserve_report(
+    tmp_path, monkeypatch, capsys, content, location, detail,
+):
+    path = tmp_path / "dataset.csv"
+    path.write_text(content, encoding="utf-8")
+    report = tmp_path / "report.json"
+    report.write_bytes(b"previous result")
+    monkeypatch.setattr(baseline_b, "counts_for_pair", lambda *a, **kw: pytest.fail("started analysis"))
+    for args in (["--check-dataset", str(path)], ["--dataset", str(path), "--output", str(report)]):
+        assert baseline_b.main(args) == 2
+        out, err = capsys.readouterr()
+        assert out == "" and str(path) + location in err and detail in err
+    assert report.read_bytes() == b"previous result"
+
+
+@pytest.mark.parametrize("mode", ["--dataset", "--check-dataset"])
+def test_output_cannot_clobber_input_manifest(tmp_path, monkeypatch, capsys, mode):
+    monkeypatch.chdir(tmp_path)
+    path = tmp_path / "data.csv"
+    original = b"repo,base,head\n.,a,b\n"
+    path.write_bytes(original)
+    monkeypatch.setattr(baseline_b, "counts_for_pair", lambda *a, **kw: pytest.fail("started analysis"))
+    assert baseline_b.main([mode, str(path), "--output", "./data.csv"]) == 2
+    assert "--output" in capsys.readouterr().err
+    assert path.read_bytes() == original
 
 
 class TestRender(unittest.TestCase):
@@ -186,21 +216,94 @@ class TestRender(unittest.TestCase):
         self.assertIn("A (upstream, unfiltered)", text)
         self.assertIn("B (upstream, changed lines)", text)
         self.assertIn("Proposed (new + worsened)", text)
-        self.assertIn("Irrelevant-warning reduction vs A", text)
-        self.assertNotIn("a single pair is not a median", text)
+        self.assertIn("Reduction in findings shown vs A (recall unmeasured)", text)
+        self.assertNotIn("Only one pair", text)
 
     def test_single_pair_is_flagged(self):
         rows = self._rows()[:1]
         text = baseline_b.render_text(rows, baseline_b.summarise(rows))
-        self.assertIn("a single pair is not a median", text)
+        self.assertIn("Only one pair", text)
 
     def test_json_round_trips(self):
-        import json
-
         rows = self._rows()
         payload = json.loads(baseline_b.render_json(rows, baseline_b.summarise(rows)))
         self.assertEqual(payload["summary"]["pairs"], 2)
         self.assertEqual(len(payload["pairs"]), 2)
+
+
+@pytest.mark.parametrize("failure", [
+    FileNotFoundError("git executable unavailable"),
+    subprocess.TimeoutExpired(["git", "diff"], timeout=1),
+    subprocess.CalledProcessError(128, ["git", "diff"], stderr="invalid revision"),
+])
+def test_failed_diff_aborts_evaluation_and_preserves_output(tmp_path, monkeypatch, capsys, failure):
+    def fail(*args, **kwargs):
+        raise failure
+
+    monkeypatch.setattr(baseline_b, "resolve_repo_root", lambda _: str(tmp_path))
+    monkeypatch.setattr(subprocess, "run", fail)
+    report = tmp_path / "report.json"
+    report.write_bytes(b"previous run")
+    assert baseline_b.main([".", "--base", "base", "--head", "head",
+                            "--format", "json", "--output", str(report)]) == 2
+    out, err = capsys.readouterr()
+    assert out == ""
+    assert "base..head" in err and "Could not read git diff" in err
+    assert report.read_bytes() == b"previous run"
+    assert baseline_b.changed_lines("repo", "base", "head") == {}
+
+
+def test_missing_dataset_returns_usage_error(tmp_path, capsys):
+    assert baseline_b.main(["--dataset", str(tmp_path / "missing.csv")]) == 2
+    out, err = capsys.readouterr()
+    assert out == "" and "missing.csv" in err
+
+
+def test_invalid_upstream_archive_preserves_output(tmp_path, capsys):
+    archive = tmp_path / "release.zip"
+    archive.write_bytes(b"unverified")
+    report = tmp_path / "report.json"
+    report.write_bytes(b"previous report")
+    assert baseline_b.main(["--base", "HEAD", "--upstream-archive", str(archive), "--output", str(report)]) == 2
+    assert "SHA-256" in capsys.readouterr().err
+    assert report.read_bytes() == b"previous report"
+
+
+def test_verified_source_runs_in_isolation_with_effective_thresholds(tmp_path, monkeypatch):
+    import hashlib
+    import zipfile
+
+    archive = tmp_path / "test.zip"
+    prefix = f"python_smells_detector-{baseline_b.UPSTREAM_COMMIT}/src/code_quality_analyzer/"
+    with zipfile.ZipFile(archive, "w") as snapshot:
+        snapshot.writestr(prefix + "__init__.py", "")
+        snapshot.writestr(prefix + "main.py", '''
+import json
+from pathlib import Path
+
+def analyze(directory, config, ignore):
+    assert json.loads(Path(config).read_text())["code_smells"]["LIMIT"] == 3
+    assert ignore == ["ignored"]
+    target = str(Path(directory) / "cart.py")
+    finding = {"type": "Code", "name": "Large Class", "file_path": target, "module_class": "Cart",
+               "line_number": 4, "severity": "medium", "description": "example"}
+    return {"findings": [finding], "errors": [{"file": target, "detector": "test"}]}
+''')
+    monkeypatch.setattr(baseline_b, "UPSTREAM_SHA256", hashlib.sha256(archive.read_bytes()).hexdigest())
+    root = tmp_path / "isolated"
+    baseline_b.prepare_upstream(archive, root, {"code_smells": {"LIMIT": 3}})
+    findings, errors = baseline_b.upstream_findings(root, str(tmp_path), ["ignored"])
+    assert [(f.category, f.smell_type, f.symbol, f.line) for f in findings] == [("code", "Large Class", "Cart", 4)]
+    assert errors == [{"file": "cart.py", "detector": "test"}]
+
+
+def test_detail_export_uses_relative_paths_for_each_member(tmp_path):
+    f = Finding(CATEGORY_CODE, "Duplicate Code", f"{tmp_path / 'a, b.py'}, {tmp_path / 'c.py'}",
+                "group", line=None)
+    assert baseline_b._record(f, str(tmp_path), "RESOLVED") == {
+        "rule": "pyex-code-duplicate-code", "path": "a, b.py, c.py", "symbol": "group",
+        "line": None, "side": "base", "state": "RESOLVED",
+    }
 
 
 if __name__ == "__main__":
