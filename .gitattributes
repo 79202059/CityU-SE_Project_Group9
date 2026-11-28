@@ -1,0 +1,2 @@
+# evaluation CSVs are compared byte for byte by the pilot guards; keep them LF everywhere
+eval/*.csv text eol=lf
