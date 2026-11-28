@@ -45,7 +45,7 @@ contribution table.
 | Story scope | 5 epics · 19 user stories · **72 SP** · 64 SP accepted by 2026-11-26 |
 | Sprints | S1 W2–W5 (Sep 14–Oct 9), S2 W6–W9 (Oct 12–Nov 6), S3 W10–W13 (Nov 9–Dec 4) |
 | Velocity | 21 / 21 / 30 SP (S3 forecast) |
-| Quality (repo, 2026-11-25) | 431 tests passed (216 upstream + 215 new), `ruff` clean, 18 test files |
+| Quality (repo, 2026-11-28) | 535 tests passed (216 upstream + 319 new), `ruff` clean, 25 test files |
 | Compatibility | default text 967 bytes / JSON 5366 bytes identical to upstream v0.3.0 |
 | NFRs | performance (cache), reliability (staged identity), extensibility (adapter + registry), usability (CLI + PR-native output) |
 | Evaluation | frozen 2026-11-06: 6 repos, 68 PRs, 24-commit mutation corpus, baselines A/B, κ reported |
@@ -145,7 +145,7 @@ together.
 
 | Source | Items |
 | --- | --- |
-| **Verified in the repository (2026-11-25/26)** | 431 tests, 18 test files, 47 rule ids, 3 detectors, 12 delta modules (~3.6k LOC), text 967 B / JSON 5366 B compatibility, ADR-008 date and content, delta CLI flags, `docs/ci` knobs, p90 risk 34–40, structural share 53–72% |
+| **Verified in the repository (2026-11-28)** | 535 tests, 25 test files, 47 rule ids, 3 detectors, 12 delta modules (~3.6k LOC), text 967 B / JSON 5366 B compatibility, ADR-008 date and content, delta CLI flags, `docs/ci` knobs, p90 risk 34–40, structural share 53–72% |
 | **Planning records in this package (review before submitting)** | Story points, hours, meeting dates/attendance/decisions, issue and PR numbers, annotation progress (42/68), κ target, benchmark tag names |
 | **To fill in by the team** | Real member names and student IDs, real GitHub issue/PR numbers, final evaluation values, final κ, release tag, signatures in `CONTRIBUTIONS.md` |
 

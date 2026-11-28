@@ -689,7 +689,7 @@ The test suite covers all three detectors (code, structural, architectural), the
 # Install dev dependencies first (includes pytest)
 uv sync --extra dev
 
-# Run the full test suite (431 tests: 216 upstream + 215 for pyexamine-delta)
+# Run the full test suite (535 tests: 216 upstream + 319 for pyexamine-delta)
 uv run python -m pytest tests/
 
 # Run a specific test file
