@@ -90,7 +90,7 @@ findings were paired.
 
 The [evaluation workflow](../../python_smells_detector-main/docs/evaluation-baselines.md) exports revision-specific findings for independent scoring. Long Method and Large Class also record below-threshold measurements to distinguish first crossings of existing symbols from newly introduced symbols. The saved baseline and cache carry these measurements. A unique comparable symbol and the same effective threshold are required. Older baselines can be refreshed on their accepted revision.
 
-1. `tests/test_fingerprint.py` — line shifts, renames, docstring-only edits, file moves.
+1. `tests/test_delta.py` — line shifts and exact-key stability (the key never carries a number).
 2. `tests/test_fuzzy.py` — 40 move/rename fixtures, including negative cases (unrelated function
    next to the old line must not match).
 3. `tests/test_structure.py` — normalised shape: rename keeps 1.0, docstring ≥ 0.85, module-level

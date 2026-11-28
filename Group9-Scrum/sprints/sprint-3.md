@@ -89,12 +89,12 @@ Observed behaviour to demo at the sprint review:
 
 ## 4. Quality status
 
-| Check | Result (2026-11-25) |
+| Check | Result (2026-11-28) |
 | --- | --- |
-| `python -m pytest tests -q` | 431 passed (216 upstream + 215 new) |
-| `ruff check src tests` | clean |
+| `python -m pytest tests -q` | 535 passed (216 upstream + 319 new) |
+| `ruff check src tests scripts` | clean |
 | Upstream output compatibility | text 967 bytes / JSON 5366 bytes, identical to v0.3.0 |
-| Test files | 18 (`test_delta.py`, `test_fingerprint.py`, `test_fuzzy.py`, `test_risk.py`, `test_sarif.py`, `test_cache.py`, …) |
+| Test files | 25 (`test_delta.py`, `test_structure.py`, `test_fuzzy.py`, `test_risk.py`, `test_sarif.py`, `test_cache.py`, …) |
 | Public API stability | `analyze_code_quality` unchanged; `pyexamine-delta` is an additional entry point |
 
 ## 5. Remaining work and risks

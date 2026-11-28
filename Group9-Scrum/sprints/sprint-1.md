@@ -29,7 +29,7 @@ working tree, and prove the fork does not alter upstream behaviour.
 | US-01 | Two-version analysis | `delta.py` CLI, orchestration, text/JSON report | M3 | 10 h | Done | PR #28 |
 | US-01 | Two-version analysis | End-to-end fixture test | M6 | 4 h | Done | `test_e2e.py` |
 | US-02 | Exact fingerprint | Normalisation + exact matching, no line numbers | M4 | 10 h | Done | PR #29 |
-| US-02 | Exact fingerprint | Line-shift fixture and invariance tests | M6 | 6 h | Done | `test_fingerprint.py` |
+| US-02 | Exact fingerprint | Line-shift fixture and invariance tests | M6 | 6 h | Done | `test_delta.py` |
 | US-03 | Four states | Classification and summary counts | M5 | 6 h | Done | PR #30 |
 | US-03 | Four states | State tests across NEW/UNCHANGED/RESOLVED | M5 | 4 h | Done | `test_delta.py` |
 | US-06 | Upstream compatibility | Byte-level diff harness for text/JSON | M2 | 4 h | Done | PR #32 |

@@ -10,13 +10,13 @@ one-to-one, so a find-and-replace is enough.
 | Story | Requirement | Sprint | Issue | PR | Modules | Key tests | Status |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | US-01 | FR1 | 1 | #3 | #28 | `delta.py`, `finding.py`, `version_provider.py` | `test_delta.py`, `test_delta_cli.py`, `test_e2e.py` | Done |
-| US-02 | FR2, FR4 | 1 | #4 | #29 | `fingerprint.py` | `test_fingerprint.py` | Done |
+| US-02 | FR2, FR4 | 1 | #4 | #29 | `fingerprint.py` | `test_delta.py` | Done |
 | US-03 | FR3 | 1 | #5 | #30 | `fingerprint.py`, `delta.py` | `test_delta.py` | Done |
 | US-04 | NFR2 (reliability) | 1 | #2 | #27 | `version_provider.py` | `test_delta.py` | Done |
 | US-05 | FR1, FR8 (support) | 1 | #6 | #31 | `baseline.py`, `delta.py` | `test_baseline.py` | Done |
 | US-06 | NFR2 (compatibility) | 1 | #7 | #32 | `main.py`, `delta.py` | `test_e2e.py`, `test_main.py` | Done |
 | US-07 | Process | 1 | #1 | #26 | repo artefacts | — | Done |
-| US-08 | FR2, FR4 | 2 | #8 | #33 | `fingerprint.py` | `test_fingerprint.py` | Done |
+| US-08 | FR2, FR4 | 2 | #8 | #33 | `fingerprint.py` | `test_structure.py` | Done |
 | US-09 | FR4 | 2 | #9 | #34 | `fuzzy.py` | `test_fuzzy.py` | Done |
 | US-10 | FR3 | 2 | #10 | #35 | `metrics.py` | `test_worsened.py` | Done |
 | US-11 | FR5 | 2 | #11 | #36 | `calibration.py` | `test_calibration.py` | Done |

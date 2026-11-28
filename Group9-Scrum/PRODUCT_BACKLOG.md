@@ -92,7 +92,7 @@ A story can enter a sprint only when:
   + normalised AST signature; it never contains a line number.
 - **AC-3:** Two runs on identical sources produce byte-identical fingerprints (determinism).
 - **AC-4:** Renaming the *file* alone does not produce one `NEW` plus one `RESOLVED`.
-- **Evidence:** PR #29, `tests/test_fingerprint.py`
+- **Evidence:** PR #29, `tests/test_delta.py::TestFingerprint`
 
 ### US-03 — Four-state lifecycle classification (3 SP, Sprint 1, E1)
 
@@ -174,7 +174,7 @@ A story can enter a sprint only when:
 - **AC-3:** The signature is deterministic across Python 3.10–3.14 (`ast.dump(...,
   include_attributes=False)` normalised and hashed).
 - **AC-4:** Golden signatures are pinned in tests for the three focal code smells.
-- **Evidence:** PR #33, `tests/test_fingerprint.py::test_ast_signature`
+- **Evidence:** PR #33, `tests/test_structure.py` (AST signature normalisation)
 
 ### US-09 — Rename / move matching (5 SP, Sprint 2, E2)
 

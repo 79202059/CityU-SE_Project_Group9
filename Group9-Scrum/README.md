@@ -65,6 +65,7 @@ contribution table.
 | W10 | Nov 9 | S3 | Planning | `week-10.md` |
 | W11 | Nov 16 | S3 | Gate policy | `week-11.md` |
 | W12 | Nov 23 | S3 | Cache accepted; evaluation starts | `week-12.md` |
+| W13 | Nov 30 | S3 | Evaluation freeze; submission checklist | `week-13.md`, `sprint-3.md` |
 
 
 ## Folder layout

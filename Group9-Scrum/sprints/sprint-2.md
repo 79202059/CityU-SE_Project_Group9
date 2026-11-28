@@ -18,7 +18,7 @@ project rather than from a library average.
 | ID | Story | Task | Owner | Est. | Status | Evidence |
 | --- | --- | --- | --- | --- | --- | --- |
 | US-08 | AST signature | Normalisation rules: names, docstrings, literals, comments | M4 | 12 h | Done | PR #33 |
-| US-08 | AST signature | Golden signatures for the three focal code smells | M6 | 6 h | Done | `test_fingerprint.py` |
+| US-08 | AST signature | Golden signatures for the three focal code smells | M6 | 6 h | Done | `test_structure.py` |
 | US-09 | Fuzzy matching | `fuzzy.py` scoring: symbol, path, AST, line proximity, metric range | M3 | 12 h | Done | PR #34 |
 | US-09 | Fuzzy matching | Threshold sweep 0.50–0.75 and precision fixtures | M5 | 6 h | Done | `test_fuzzy.py` |
 | US-10 | WORSENED | `metrics.py` rule → measured value + threshold; `worsen_detail` | M5 | 8 h | Done | PR #35 |

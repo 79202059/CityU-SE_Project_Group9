@@ -42,7 +42,7 @@ The four decisions are deliberately layered so that they do not fight each other
 | Decision | How we verify it |
 | --- | --- |
 | Cache correctness | `tests/test_cache.py`: hit equals cold run; invalidation on threshold/version change |
-| Identity stability | `tests/test_fingerprint.py`: line shifts, renames, docstring edits |
+| Identity stability | `tests/test_delta.py` (line shifts) and `tests/test_structure.py` (renames, docstring edits) |
 | Matching precision | `tests/test_fuzzy.py` negative fixtures + precision sample on `site-packages` |
 | Adapter boundary | `tests/test_rule_coverage.py`: all 47 rule ids; a detector can be added without editing `delta.py` |
 | Usability | quick-start executed on a clean clone; demo script ≤ 10 minutes |
